@@ -7,7 +7,7 @@ import { staffApi } from '../../api/staff';
 import { availabilityApi } from '../../api/availability';
 import { LeaveRequestForm } from './LeaveRequestForm';
 import { AdminApprovalPanel } from './AdminApprovalPanel';
-import { PageLoader } from '../../components/LoadingSpinner';
+import { PageLoader, LoadingSpinner } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
 import type { Staff, LeaveRequest, Availability } from '../../types';
 
