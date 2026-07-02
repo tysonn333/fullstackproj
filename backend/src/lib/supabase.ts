@@ -7,11 +7,15 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 
 if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables are required');
+  console.warn(
+    '\n⚠️  SUPABASE_URL / SUPABASE_SERVICE_KEY not set.\n' +
+    '   Copy backend/.env.example → backend/.env and fill in your Supabase credentials.\n' +
+    '   Database queries will fail until env vars are provided.\n'
+  );
 }
 
 // Server-side admin client with service role key — bypasses RLS
-export const supabaseAdmin: SupabaseClient = createClient(supabaseUrl, supabaseServiceKey, {
+export const supabaseAdmin: SupabaseClient = createClient(supabaseUrl ?? 'http://localhost', supabaseServiceKey ?? 'placeholder', {
   auth: {
     autoRefreshToken: false,
     persistSession: false,

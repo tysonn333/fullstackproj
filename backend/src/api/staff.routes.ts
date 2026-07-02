@@ -187,6 +187,95 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response, next: Nex
 });
 
 /**
+ * GET /api/v1/staff/:id/schedule?week_start=YYYY-MM-DD
+ * Returns the staff member's assignments for the 7-day window starting week_start,
+ * along with cumulative hours and the longest run of consecutive assigned days.
+ */
+router.get('/:id/schedule', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const staffId = parseInt(req.params.id, 10);
+    const weekStart = (req.query.week_start as string) ?? new Date().toISOString().split('T')[0];
+
+    const start = new Date(weekStart);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    const weekEnd = end.toISOString().split('T')[0];
+
+    const { data, error } = await supabaseAdmin
+      .from('assignments')
+      .select(`
+        assignment_id, slot_id, staff_id, status, assigned_at,
+        shift_slots!inner(
+          slot_id, roster_id, ambulance_id, start_time, end_time, service_type, crew_position,
+          rosters!inner(roster_date)
+        )
+      `)
+      .eq('staff_id', staffId)
+      .neq('status', 'cancelled');
+
+    if (error) throw error;
+
+    type SlotJoin = {
+      start_time: string;
+      end_time: string;
+      rosters?: { roster_date?: string };
+    };
+    const slotOf = (a: unknown): SlotJoin | undefined =>
+      (a as { shift_slots?: SlotJoin }).shift_slots;
+
+    // Filter to the requested week by the joined roster_date, then compute stats.
+    const inWeek = (data ?? []).filter((a) => {
+      const rd = slotOf(a)?.rosters?.roster_date;
+      return rd !== undefined && rd >= weekStart && rd <= weekEnd;
+    });
+
+    const minutesBetween = (startTime: string, endTime: string): number => {
+      const [sh, sm] = startTime.split(':').map(Number);
+      const [eh, em] = endTime.split(':').map(Number);
+      let diff = eh * 60 + em - (sh * 60 + sm);
+      if (diff < 0) diff += 24 * 60;
+      return diff;
+    };
+
+    let totalMinutes = 0;
+    const dates = new Set<string>();
+    for (const a of inWeek) {
+      const slot = slotOf(a);
+      if (slot) {
+        totalMinutes += minutesBetween(slot.start_time, slot.end_time);
+        if (slot.rosters?.roster_date) dates.add(slot.rosters.roster_date);
+      }
+    }
+
+    // Longest consecutive-day streak among distinct assigned dates.
+    const sortedDates = Array.from(dates).sort();
+    let consecutiveDays = 0;
+    let run = 0;
+    let prev: Date | null = null;
+    for (const d of sortedDates) {
+      const cur = new Date(d);
+      if (prev && (cur.getTime() - prev.getTime()) / 86_400_000 === 1) {
+        run += 1;
+      } else {
+        run = 1;
+      }
+      if (run > consecutiveDays) consecutiveDays = run;
+      prev = cur;
+    }
+
+    res.json({
+      data: {
+        assignments: inWeek,
+        total_hours: Math.round((totalMinutes / 60) * 100) / 100,
+        consecutive_days: consecutiveDays,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * GET /api/v1/staff/:id/certifications
  */
 router.get('/:id/certifications', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
