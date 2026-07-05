@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { availabilityApi } from '../../api/availability';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
@@ -72,7 +72,7 @@ export const AdminApprovalPanel: React.FC<AdminApprovalPanelProps> = ({
         updated = await availabilityApi.approveLeaveRequest(req.id, action.notes);
         success(
           'Leave approved',
-          `${req.staff?.name || 'Staff'}'s leave from ${format(new Date(req.start_date), 'dd MMM')} has been approved.`
+          `${req.staff?.name || 'Staff'}'s leave from ${format(parseISO(req.start_date), 'dd MMM')} has been approved.`
         );
       } else {
         updated = await availabilityApi.rejectLeaveRequest(req.id, action.notes);
@@ -135,9 +135,9 @@ export const AdminApprovalPanel: React.FC<AdminApprovalPanelProps> = ({
                               {leaveTypeLabels[req.leave_type]}
                             </span>
                             <span className="text-xs text-gray-600">
-                              {format(new Date(req.start_date), 'dd MMM yyyy')}
+                              {format(parseISO(req.start_date), 'dd MMM yyyy')}
                               {req.start_date !== req.end_date && (
-                                <> &mdash; {format(new Date(req.end_date), 'dd MMM yyyy')}</>
+                                <> &mdash; {format(parseISO(req.end_date), 'dd MMM yyyy')}</>
                               )}
                             </span>
                           </div>
@@ -223,8 +223,8 @@ export const AdminApprovalPanel: React.FC<AdminApprovalPanelProps> = ({
                   <div>
                     <p className="text-sm font-medium text-gray-800">{req.staff?.name}</p>
                     <p className="text-xs text-gray-500">
-                      {format(new Date(req.start_date), 'dd MMM')}
-                      {req.start_date !== req.end_date && ` — ${format(new Date(req.end_date), 'dd MMM')}`}
+                      {format(parseISO(req.start_date), 'dd MMM')}
+                      {req.start_date !== req.end_date && ` — ${format(parseISO(req.end_date), 'dd MMM')}`}
                       {' · '}{leaveTypeLabels[req.leave_type]}
                     </p>
                   </div>

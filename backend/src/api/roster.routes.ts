@@ -89,7 +89,7 @@ router.get('/:id/slots', async (req: AuthenticatedRequest, res: Response, next: 
         ambulances(registration, service_type),
         assignments(
           assignment_id, staff_id, score, status, assigned_at,
-          staff(full_name, role, employment_type)
+          staff(full_name, role, employment_type, phone, email, home_postal, status)
         )
       `)
       .eq('roster_id', rosterId)

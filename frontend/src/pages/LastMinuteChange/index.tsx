@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { format, addDays, parseISO } from 'date-fns';
+import axios from 'axios';
+import { format, addDays } from 'date-fns';
 import { rosterApi } from '../../api/roster';
 import { CandidateList } from './CandidateList';
 import { PageLoader } from '../../components/LoadingSpinner';
@@ -44,7 +45,6 @@ export const LastMinuteChange: React.FC = () => {
   const [slots, setSlots] = useState<ShiftSlot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(true);
   const [selectedSlot, setSelectedSlot] = useState<ShiftSlot | null>(null);
-  const [droppingStaffId, setDroppingStaffId] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
@@ -83,7 +83,6 @@ export const LastMinuteChange: React.FC = () => {
     }
     // If multiple staff, need to select one; for simplicity use the first
     const staffToDrop = assignments[0];
-    setDroppingStaffId(staffToDrop.staff_id);
 
     confirm({
       title: 'Mark Staff as Unavailable',
@@ -91,7 +90,15 @@ export const LastMinuteChange: React.FC = () => {
       confirmLabel: 'Mark Dropped',
       variant: 'warning',
       onConfirm: async () => {
-        await rosterApi.flagDropped(selectedSlot.id, staffToDrop.staff_id, 'Last-minute unavailability');
+        try {
+          await rosterApi.flagDropped(staffToDrop.id, selectedSlot.id);
+        } catch (err) {
+          const backendError = axios.isAxiosError(err)
+            ? (err.response?.data as { error?: string } | undefined)?.error
+            : undefined;
+          toastError('Could not mark staff as dropped', backendError);
+          return;
+        }
         success('Staff marked as dropped', 'Finding replacement candidates...');
         setStep('select-candidate');
         setLoadingCandidates(true);
@@ -118,8 +125,11 @@ export const LastMinuteChange: React.FC = () => {
         `${candidate?.staff.name || 'Staff'} has been assigned to replace the dropped slot.`
       );
       setStep('done');
-    } catch {
-      toastError('Swap failed', 'Could not confirm the swap. Please try again.');
+    } catch (err) {
+      const backendError = axios.isAxiosError(err)
+        ? (err.response?.data as { error?: string } | undefined)?.error
+        : undefined;
+      toastError('Swap failed', backendError ?? 'Could not confirm the swap. Please try again.');
     } finally {
       setSwapping(false);
     }
@@ -128,7 +138,6 @@ export const LastMinuteChange: React.FC = () => {
   const handleReset = () => {
     setSelectedSlot(null);
     setSelectedCandidateId(null);
-    setDroppingStaffId(null);
     setCandidates([]);
     setSwapReason('');
     setStep('select-slot');

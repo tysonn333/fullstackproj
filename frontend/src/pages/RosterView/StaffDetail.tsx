@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { format, startOfWeek, addDays } from 'date-fns';
+import { format, startOfWeek, addDays, parseISO } from 'date-fns';
 import { staffApi } from '../../api/staff';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
-import type { Staff, Assignment } from '../../types';
+import type { Staff, Assignment, Certification } from '../../types';
 
 interface StaffDetailProps {
   staff: Staff;
@@ -19,9 +19,10 @@ export const StaffDetail: React.FC<StaffDetailProps> = ({ staff, onClose }) => {
   const [weeklyData, setWeeklyData] = useState<WeeklyData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [certifications, setCertifications] = useState<Certification[]>(staff.certifications ?? []);
 
   const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
-  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(new Date(weekStart), i));
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(parseISO(weekStart), i));
 
   useEffect(() => {
     setLoading(true);
@@ -31,6 +32,14 @@ export const StaffDetail: React.FC<StaffDetailProps> = ({ staff, onClose }) => {
       .catch((err) => setError(err.message || 'Failed to load weekly schedule'))
       .finally(() => setLoading(false));
   }, [staff.id, weekStart]);
+
+  // The staff object from the roster grid carries no certifications — load them.
+  useEffect(() => {
+    staffApi
+      .getCertifications(staff.id)
+      .then(setCertifications)
+      .catch(() => { /* keep whatever the caller provided */ });
+  }, [staff.id]);
 
   const roleColor: Record<string, string> = {
     driver: 'bg-blue-100 text-blue-700',
@@ -110,7 +119,7 @@ export const StaffDetail: React.FC<StaffDetailProps> = ({ staff, onClose }) => {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h4 className="font-semibold text-gray-900">Weekly Schedule</h4>
-              <span className="text-xs text-gray-500">Week of {format(new Date(weekStart), 'MMM d, yyyy')}</span>
+              <span className="text-xs text-gray-500">Week of {format(parseISO(weekStart), 'MMM d, yyyy')}</span>
             </div>
 
             {loading ? (
@@ -203,16 +212,19 @@ export const StaffDetail: React.FC<StaffDetailProps> = ({ staff, onClose }) => {
           </div>
 
           {/* Certifications */}
-          {staff.certifications && staff.certifications.length > 0 && (
+          {certifications.length > 0 && (
             <div>
               <h4 className="font-semibold text-gray-900 mb-3">Certifications</h4>
               <div className="space-y-2">
-                {staff.certifications.map((cert) => {
+                {certifications.map((cert) => {
                   const expiryDate = new Date(cert.expires_at);
+                  const hasExpiry = Boolean(cert.expires_at) && !isNaN(expiryDate.getTime());
                   const now = new Date();
-                  const daysToExpiry = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-                  const isExpired = daysToExpiry < 0;
-                  const isExpiringSoon = daysToExpiry >= 0 && daysToExpiry <= 30;
+                  const daysToExpiry = hasExpiry
+                    ? Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+                    : Infinity;
+                  const isExpired = hasExpiry && daysToExpiry < 0;
+                  const isExpiringSoon = hasExpiry && daysToExpiry >= 0 && daysToExpiry <= 30;
 
                   return (
                     <div key={cert.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
@@ -224,9 +236,11 @@ export const StaffDetail: React.FC<StaffDetailProps> = ({ staff, onClose }) => {
                       </div>
                       <div className="text-right">
                         <span className={`badge ${
-                          isExpired ? 'badge-red' : isExpiringSoon ? 'badge-yellow' : 'badge-green'
+                          isExpired ? 'badge-red' : isExpiringSoon ? 'badge-yellow' : hasExpiry ? 'badge-green' : 'badge-gray'
                         }`}>
-                          {isExpired
+                          {!hasExpiry
+                            ? 'No expiry'
+                            : isExpired
                             ? 'Expired'
                             : isExpiringSoon
                             ? `Expires in ${daysToExpiry}d`

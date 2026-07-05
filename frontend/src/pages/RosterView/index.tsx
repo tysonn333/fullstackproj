@@ -9,11 +9,21 @@ import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import type { ShiftSlot, Staff, Flag, Roster } from '../../types';
 
-// Singapore public holidays (simplified list - would come from API in production)
-const SG_PUBLIC_HOLIDAYS_2024 = [
+// Singapore public holidays (simplified static list, incl. observed days —
+// extend each year; would come from an API in production)
+const SG_PUBLIC_HOLIDAYS = [
+  // 2024
   '2024-01-01', '2024-02-10', '2024-02-11', '2024-03-29',
   '2024-04-10', '2024-05-01', '2024-05-22', '2024-05-23',
   '2024-06-17', '2024-08-09', '2024-10-31', '2024-12-25',
+  // 2025
+  '2025-01-01', '2025-01-29', '2025-01-30', '2025-03-31',
+  '2025-04-18', '2025-05-01', '2025-05-12', '2025-06-07',
+  '2025-08-09', '2025-10-20', '2025-12-25',
+  // 2026
+  '2026-01-01', '2026-02-17', '2026-02-18', '2026-03-21',
+  '2026-04-03', '2026-05-01', '2026-05-27', '2026-06-01',
+  '2026-08-10', '2026-11-09', '2026-12-25',
 ];
 
 export const RosterView: React.FC = () => {
@@ -32,7 +42,7 @@ export const RosterView: React.FC = () => {
 
   const today = format(new Date(), 'yyyy-MM-dd');
   const isReadOnly = selectedDate < today;
-  const isWeekendOrHoliday = isWeekend(parseISO(selectedDate)) || SG_PUBLIC_HOLIDAYS_2024.includes(selectedDate);
+  const isWeekendOrHoliday = isWeekend(parseISO(selectedDate)) || SG_PUBLIC_HOLIDAYS.includes(selectedDate);
 
   const loadRoster = useCallback(async (date: string) => {
     setLoading(true);
@@ -307,7 +317,7 @@ export const RosterView: React.FC = () => {
           </div>
           <div className="flex items-center gap-1.5 text-sm">
             <span className="w-2.5 h-2.5 bg-gray-400 rounded-full" />
-            <span className="text-gray-600">Total slots: <strong className="text-gray-900">{isWeekendOrHoliday ? Math.min(slots.length, 2) : slots.length}</strong></span>
+            <span className="text-gray-600">Total slots: <strong className="text-gray-900">{slots.length}</strong></span>
           </div>
           {activeFlags.length > 0 && (
             <div className="flex items-center gap-1.5 text-sm">

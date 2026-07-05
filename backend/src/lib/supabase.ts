@@ -1,7 +1,5 @@
+import './env';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
@@ -9,7 +7,7 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 if (!supabaseUrl || !supabaseServiceKey) {
   console.warn(
     '\n⚠️  SUPABASE_URL / SUPABASE_SERVICE_KEY not set.\n' +
-    '   Copy backend/.env.example → backend/.env and fill in your Supabase credentials.\n' +
+    '   Copy .env.example → .env (repo root or backend/) and fill in your Supabase credentials.\n' +
     '   Database queries will fail until env vars are provided.\n'
   );
 }

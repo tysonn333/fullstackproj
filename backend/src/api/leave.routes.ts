@@ -63,11 +63,13 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
 
 /**
  * PUT /api/v1/leave/:id/approve
+ * Body: { notes? }
  */
 router.put('/:id/approve', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const leaveId = parseInt(req.params.id, 10);
-    const { leave, conflicts } = await approveLeave(leaveId, req.user!.id);
+    const { notes } = req.body;
+    const { leave, conflicts } = await approveLeave(leaveId, req.user!.id, notes);
 
     res.json({
       data: leave,

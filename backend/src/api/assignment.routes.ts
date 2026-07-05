@@ -90,10 +90,10 @@ router.get('/slots/:id/ranked', async (req: AuthenticatedRequest, res: Response,
 router.post('/slots/:id/assign', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const slotId = parseInt(req.params.id, 10);
-    const { staff_id } = req.body;
+    const staff_id = Number(req.body.staff_id);
 
-    if (!staff_id) {
-      res.status(400).json({ error: 'staff_id is required' });
+    if (!Number.isInteger(staff_id) || staff_id <= 0) {
+      res.status(400).json({ error: 'staff_id is required and must be a positive integer' });
       return;
     }
 
@@ -103,15 +103,15 @@ router.post('/slots/:id/assign', async (req: AuthenticatedRequest, res: Response
       return;
     }
 
-    // Check if slot already assigned
+    // At most one assignment row can exist per slot (UNIQUE constraint),
+    // including a cancelled leftover — fetch it whatever its status.
     const { data: existing } = await supabaseAdmin
       .from('assignments')
       .select('assignment_id, status')
       .eq('slot_id', slotId)
-      .neq('status', 'cancelled')
       .single();
 
-    if (existing) {
+    if (existing && existing.status !== 'cancelled') {
       res.status(409).json({
         error: `Slot already has an active assignment (assignment_id: ${existing.assignment_id}). Cancel it first or use PUT /assignments/:id.`,
       });
@@ -142,17 +142,28 @@ router.post('/slots/:id/assign', async (req: AuthenticatedRequest, res: Response
     );
     const score = ranked[0]?.score ?? 0;
 
-    const { data: assignment, error: assignErr } = await supabaseAdmin
-      .from('assignments')
-      .insert({
-        slot_id: slotId,
-        staff_id,
-        score,
-        status: 'assigned',
-        assigned_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+    const assignmentValues = {
+      slot_id: slotId,
+      staff_id,
+      score,
+      status: 'assigned',
+      assigned_at: new Date().toISOString(),
+    };
+
+    // Reuse a cancelled row if one occupies the slot — inserting a second
+    // row would violate the UNIQUE(slot_id) constraint.
+    const { data: assignment, error: assignErr } = existing
+      ? await supabaseAdmin
+          .from('assignments')
+          .update(assignmentValues)
+          .eq('assignment_id', existing.assignment_id)
+          .select()
+          .single()
+      : await supabaseAdmin
+          .from('assignments')
+          .insert(assignmentValues)
+          .select()
+          .single();
 
     if (assignErr) {
       if (assignErr.code === '23505') {
@@ -214,7 +225,8 @@ router.post('/slots/:id/assign', async (req: AuthenticatedRequest, res: Response
 router.put('/assignments/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const assignmentId = parseInt(req.params.id, 10);
-    const { status, staff_id } = req.body;
+    const { status } = req.body;
+    const staff_id = req.body.staff_id != null ? Number(req.body.staff_id) : undefined;
 
     const { data: existing, error: fetchErr } = await supabaseAdmin
       .from('assignments')
@@ -291,17 +303,21 @@ router.put('/assignments/:id', async (req: AuthenticatedRequest, res: Response, 
 });
 
 /**
- * POST /api/v1/roster/:id/reassign
+ * POST /api/v1/:id/reassign
+ * (router is mounted at bare /api/v1 — there is no /roster segment;
+ * the frontend calls /api/v1/${roster_id}/reassign)
  * Last-minute change: reassign a slot within a published roster.
  * Body: { slot_id, new_staff_id, reason? }
  */
 router.post('/:id/reassign', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const rosterId = parseInt(req.params.id, 10);
-    const { slot_id, new_staff_id, reason } = req.body;
+    const { reason } = req.body;
+    const slot_id = Number(req.body.slot_id);
+    const new_staff_id = Number(req.body.new_staff_id);
 
-    if (!slot_id || !new_staff_id) {
-      res.status(400).json({ error: 'slot_id and new_staff_id are required' });
+    if (!Number.isInteger(slot_id) || slot_id <= 0 || !Number.isInteger(new_staff_id) || new_staff_id <= 0) {
+      res.status(400).json({ error: 'slot_id and new_staff_id are required and must be positive integers' });
       return;
     }
 
@@ -322,12 +338,12 @@ router.post('/:id/reassign', async (req: AuthenticatedRequest, res: Response, ne
       return;
     }
 
-    // Fetch current assignment for the slot
+    // Fetch the assignment row for the slot — at most one exists
+    // (UNIQUE(slot_id)), possibly cancelled after a drop.
     const { data: currentAssignment } = await supabaseAdmin
       .from('assignments')
       .select('*')
       .eq('slot_id', slot_id)
-      .neq('status', 'cancelled')
       .single();
 
     // Fetch slot
@@ -348,26 +364,39 @@ router.post('/:id/reassign', async (req: AuthenticatedRequest, res: Response, ne
       return;
     }
 
-    // Cancel old assignment if it exists
-    if (currentAssignment) {
-      await supabaseAdmin
-        .from('assignments')
-        .update({ status: 'cancelled' })
-        .eq('assignment_id', currentAssignment.assignment_id);
-    }
+    // Score the incoming staff member the same way direct assignment does
+    const rankedNew = await rankCandidates(
+      filterResults.filter((c) => c.staff_id === new_staff_id),
+      slotResult.slot,
+      slotResult.rosterDate
+    );
+    const newScore = rankedNew[0]?.score ?? 0;
 
-    // Create new assignment
-    const { data: newAssignment, error: assignErr } = await supabaseAdmin
-      .from('assignments')
-      .insert({
-        slot_id,
-        staff_id: new_staff_id,
-        score: 0,
-        status: 'assigned',
-        assigned_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+    const assignmentValues = {
+      slot_id,
+      staff_id: new_staff_id,
+      score: newScore,
+      // A swap of an active assignment is recorded as 'swapped'; filling a
+      // slot whose assignment was cancelled (dropped) is a fresh 'assigned'.
+      status: currentAssignment && currentAssignment.status !== 'cancelled' ? 'swapped' : 'assigned',
+      assigned_at: new Date().toISOString(),
+    };
+
+    // UNIQUE(slot_id) allows only one assignment row per slot, so update the
+    // existing row in place (the previous staff member is preserved in the
+    // audit log) rather than cancel-and-insert, which would violate it.
+    const { data: newAssignment, error: assignErr } = currentAssignment
+      ? await supabaseAdmin
+          .from('assignments')
+          .update(assignmentValues)
+          .eq('assignment_id', currentAssignment.assignment_id)
+          .select()
+          .single()
+      : await supabaseAdmin
+          .from('assignments')
+          .insert(assignmentValues)
+          .select()
+          .single();
 
     if (assignErr) throw assignErr;
 
@@ -385,6 +414,14 @@ router.post('/:id/reassign', async (req: AuthenticatedRequest, res: Response, ne
       },
     });
 
+    await notifyAssignment(
+      new_staff_id,
+      slot_id,
+      slotResult.rosterDate,
+      slotResult.slot.start_time,
+      slotResult.slot.end_time
+    );
+
     res.json({
       data: newAssignment,
       previous_assignment: currentAssignment ?? null,
@@ -395,7 +432,8 @@ router.post('/:id/reassign', async (req: AuthenticatedRequest, res: Response, ne
 });
 
 /**
- * GET /api/v1/roster/:id/reassign/:slotId/candidates
+ * GET /api/v1/:id/reassign/:slotId/candidates
+ * (router is mounted at bare /api/v1 — there is no /roster segment)
  * Returns ranked candidates for last-minute reassignment.
  */
 router.get('/:id/reassign/:slotId/candidates', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {

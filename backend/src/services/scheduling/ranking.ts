@@ -11,7 +11,13 @@
  */
 
 import supabaseAdmin from '../../lib/supabase';
-import { FilterResult, ShiftSlot, timeToMinutes } from './filter';
+import {
+  FilterResult,
+  ShiftSlot,
+  timeToMinutes,
+  shiftDurationMinutes,
+  shiftEndDateTime,
+} from './filter';
 
 export interface RankedCandidate extends FilterResult {
   score: number;
@@ -39,11 +45,15 @@ const LATE_SHIFT_THRESHOLD = 18 * 60;
  * Returns the number of late shifts (start >= 18:00) the staff member has this calendar month.
  */
 async function getLateShiftCount(staffId: number, month: string): Promise<number> {
-  // month = "YYYY-MM"
+  // month = "YYYY-MM" — compute the boundary with string math so the result
+  // is timezone-independent (Date/setMonth mixes UTC parsing with local-time
+  // arithmetic and can land in the wrong month on negative-offset servers).
+  const [year, mon] = month.split('-').map((n) => parseInt(n, 10));
   const startOfMonth = `${month}-01`;
-  const endOfMonth = new Date(new Date(startOfMonth).setMonth(new Date(startOfMonth).getMonth() + 1))
-    .toISOString()
-    .split('T')[0];
+  const endOfMonth =
+    mon === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(mon + 1).padStart(2, '0')}-01`;
 
   const { data } = await supabaseAdmin
     .from('assignments')
@@ -75,13 +85,13 @@ async function getLateShiftCount(staffId: number, month: string): Promise<number
 async function getRestHours(staffId: number, rosterDate: string, slotStartTime: string): Promise<number> {
   const { data } = await supabaseAdmin
     .from('assignments')
-    .select('shift_slots!inner(end_time, rosters!inner(roster_date))')
+    .select('shift_slots!inner(start_time, end_time, rosters!inner(roster_date))')
     .eq('staff_id', staffId)
     .neq('status', 'cancelled');
 
   if (!data || data.length === 0) return 24;
 
-  type Row = { shift_slots: { end_time: string; rosters: { roster_date: string } } };
+  type Row = { shift_slots: { start_time: string; end_time: string; rosters: { roster_date: string } } };
 
   const slotStartDt = new Date(`${rosterDate}T${slotStartTime}`);
   let lastEnd: Date | null = null;
@@ -90,7 +100,7 @@ async function getRestHours(staffId: number, rosterDate: string, slotStartTime: 
     const d = row.shift_slots.rosters?.roster_date;
     if (!d) continue;
     if (d >= rosterDate) continue;
-    const endDt = new Date(`${d}T${row.shift_slots.end_time}`);
+    const endDt = shiftEndDateTime(d, row.shift_slots.start_time, row.shift_slots.end_time);
     if (!lastEnd || endDt > lastEnd) lastEnd = endDt;
   }
 
@@ -155,8 +165,10 @@ async function getContinuityScore(
     };
   };
 
+  // End times extend past 1440 for overnight shifts so same-day overlap
+  // comparisons stay on one linear axis.
   const newStart = timeToMinutes(slot.start_time);
-  const newEnd = timeToMinutes(slot.end_time);
+  const newEnd = newStart + shiftDurationMinutes(slot.start_time, slot.end_time);
 
   for (const row of data as unknown as Row[]) {
     const d = row.shift_slots.rosters?.roster_date;
@@ -164,7 +176,7 @@ async function getContinuityScore(
     if (row.shift_slots.slot_id === slot.slot_id) continue;
 
     const existStart = timeToMinutes(row.shift_slots.start_time);
-    const existEnd = timeToMinutes(row.shift_slots.end_time);
+    const existEnd = existStart + shiftDurationMinutes(row.shift_slots.start_time, row.shift_slots.end_time);
     const overlap = Math.max(0, Math.min(newEnd, existEnd) - Math.max(newStart, existStart));
     if (overlap > 0) return 0.0;
   }

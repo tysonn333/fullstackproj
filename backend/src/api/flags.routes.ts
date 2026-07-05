@@ -223,6 +223,7 @@ router.get('/export', async (req: AuthenticatedRequest, res: Response, next: Nex
     if (req.query.roster_id) query = query.eq('roster_id', parseInt(req.query.roster_id as string, 10));
     if (req.query.status) query = query.eq('status', req.query.status as string);
     if (req.query.severity) query = query.eq('severity', req.query.severity as string);
+    if (req.query.flag_type) query = query.eq('flag_type', req.query.flag_type as string);
 
     const { data, error } = await query;
     if (error) throw error;

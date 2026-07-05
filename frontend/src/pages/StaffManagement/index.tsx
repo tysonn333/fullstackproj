@@ -6,7 +6,7 @@ import { CertificationsPanel } from './CertificationsPanel';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
-import type { Staff, StaffFilters, StaffRole, StaffStatus, EmploymentType } from '../../types';
+import type { Staff, StaffFilters, StaffRole, StaffStatus } from '../../types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

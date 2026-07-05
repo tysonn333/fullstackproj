@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { format } from 'date-fns';
+import { format, parseISO, isValid } from 'date-fns';
 import { flagsApi } from '../../api/flags';
 import { useToast } from '../../components/Toast';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
@@ -132,7 +132,9 @@ export const FlagCard: React.FC<FlagCardProps> = ({
             </div>
             <div className="flex items-center gap-1.5 text-xs text-gray-400 flex-shrink-0">
               {flag.shift_start && <span>{flag.shift_start.slice(0, 5)}</span>}
-              <span>{format(new Date(flag.affected_date), 'dd MMM')}</span>
+              {flag.affected_date && isValid(parseISO(flag.affected_date)) && (
+                <span>{format(parseISO(flag.affected_date), 'dd MMM')}</span>
+              )}
             </div>
           </div>
           <p className="text-xs text-gray-600 mt-1 line-clamp-2">{flag.description}</p>

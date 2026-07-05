@@ -57,6 +57,34 @@ export function timeToMinutes(t: string): number {
 }
 
 /**
+ * A shift whose end_time is <= its start_time crosses midnight (e.g. 18:00–06:00).
+ */
+export function isOvernight(startTime: string, endTime: string): boolean {
+  return timeToMinutes(endTime) <= timeToMinutes(startTime);
+}
+
+/**
+ * Duration of a shift in minutes, handling shifts that cross midnight.
+ */
+export function shiftDurationMinutes(startTime: string, endTime: string): number {
+  const start = timeToMinutes(startTime);
+  const end = timeToMinutes(endTime);
+  return end > start ? end - start : end + 1440 - start;
+}
+
+/**
+ * Absolute end of a shift that starts on shiftDate — rolls to the next day
+ * for overnight shifts.
+ */
+export function shiftEndDateTime(shiftDate: string, startTime: string, endTime: string): Date {
+  const end = new Date(`${shiftDate}T${endTime}`);
+  if (isOvernight(startTime, endTime)) {
+    end.setDate(end.getDate() + 1);
+  }
+  return end;
+}
+
+/**
  * Computes overlap in minutes between two [start, end) ranges (all in minutes).
  */
 function overlapMinutes(s1: number, e1: number, s2: number, e2: number): number {
@@ -163,8 +191,7 @@ async function getLastShiftEnd(
     if (!slotDate) continue;
     if (slotDate >= workDate) continue;
 
-    const endTime = row.shift_slots.end_time;
-    const endDt = new Date(`${slotDate}T${endTime}`);
+    const endDt = shiftEndDateTime(slotDate, row.shift_slots.start_time, row.shift_slots.end_time);
     if (!lastEnd || endDt > lastEnd) {
       lastEnd = endDt;
     }
@@ -203,9 +230,7 @@ async function getDailyScheduledMinutes(
     if (row.slot_id === excludeSlotId) continue;
     const slotDate = row.shift_slots.rosters?.roster_date;
     if (slotDate !== workDate) continue;
-    const start = timeToMinutes(row.shift_slots.start_time);
-    const end = timeToMinutes(row.shift_slots.end_time);
-    total += end - start;
+    total += shiftDurationMinutes(row.shift_slots.start_time, row.shift_slots.end_time);
   }
 
   return total;
@@ -281,8 +306,10 @@ export async function filterCandidates(
   candidates: StaffCandidate[]
 ): Promise<FilterResult[]> {
   const slotStart = timeToMinutes(slot.start_time);
-  const slotEnd = timeToMinutes(slot.end_time);
-  const slotDurationMinutes = slotEnd - slotStart;
+  const slotDuration = shiftDurationMinutes(slot.start_time, slot.end_time);
+  // For overnight slots the end extends past 1440 so half-day overlap checks
+  // against the roster date's AM/PM windows still work.
+  const slotEnd = slotStart + slotDuration;
 
   const results: FilterResult[] = [];
 
@@ -349,7 +376,7 @@ export async function filterCandidates(
       rosterDate,
       slot.slot_id
     );
-    if (dailyMinutes + slotDurationMinutes > 720) {
+    if (dailyMinutes + slotDuration > 720) {
       // 720 min = 12 h
       results.push({
         staff_id: candidate.staff_id,
@@ -357,7 +384,7 @@ export async function filterCandidates(
         role: candidate.role,
         eligible: false,
         hard_blocked: true,
-        block_reason: `Would exceed 12h daily limit (${((dailyMinutes + slotDurationMinutes) / 60).toFixed(1)}h)`,
+        block_reason: `Would exceed 12h daily limit (${((dailyMinutes + slotDuration) / 60).toFixed(1)}h)`,
         consecutive_days_flag: false,
         consecutive_days_count: 0,
       });
