@@ -6,8 +6,10 @@
  * Strategy:
  *   1. Create (or reuse draft) a roster row for the date.
  *   2. Fetch all ambulances in service on that date.
- *   3. For each ambulance generate two shift slots (day 06:00–18:00, night 18:00–06:00)
+ *   3. For each ambulance generate two shift slots (day 06:00–14:00, evening 14:00–22:00)
  *      for each crew position (driver, attendant), respecting the ambulance service_type.
+ *      Both shifts sit inside the 06:00–22:00 operational window and satisfy the
+ *      shift_slots CHECK (end_time > start_time) — no overnight/midnight-spanning slots.
  *   4. For each slot, run the filter + ranking pipeline and auto-assign the top-ranked
  *      eligible candidate.
  *   5. Where no candidate is available, leave the slot unassigned and raise a coverage_gap flag.
@@ -35,9 +37,9 @@ interface GenerateResult {
 }
 
 const DAY_SHIFT_START = '06:00:00';
-const DAY_SHIFT_END = '18:00:00';
-const NIGHT_SHIFT_START = '18:00:00';
-const NIGHT_SHIFT_END = '06:00:00'; // next day — handled as 30:00 in scheduling logic
+const DAY_SHIFT_END = '14:00:00';
+const EVENING_SHIFT_START = '14:00:00';
+const EVENING_SHIFT_END = '22:00:00';
 
 async function upsertRoster(rosterDate: string, force: boolean): Promise<number> {
   // Check for existing roster
@@ -151,12 +153,12 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
           service_type: svcType,
           crew_position: position,
         });
-        // Night shift
+        // Evening shift
         slotsToCreate.push({
           roster_id: rosterId,
           ambulance_id: amb.ambulance_id,
-          start_time: NIGHT_SHIFT_START,
-          end_time: NIGHT_SHIFT_END,
+          start_time: EVENING_SHIFT_START,
+          end_time: EVENING_SHIFT_END,
           service_type: svcType,
           crew_position: position,
         });
