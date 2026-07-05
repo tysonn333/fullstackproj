@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './lib/env';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -61,7 +61,7 @@ app.use(errorHandler);
 
 // ── Server startup ─────────────────────────────────────────────────────────
 
-const PORT = parseInt(process.env.PORT ?? '3001', 10);
+const PORT = parseInt(process.env.PORT ?? '3000', 10);
 
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => {
