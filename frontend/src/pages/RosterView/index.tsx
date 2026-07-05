@@ -6,7 +6,8 @@ import { CrewGrid } from './CrewGrid';
 import { StaffDetail } from './StaffDetail';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
-import type { ShiftSlot, Staff, Flag } from '../../types';
+import { useConfirm } from '../../components/ConfirmDialog';
+import type { ShiftSlot, Staff, Flag, Roster } from '../../types';
 
 // Singapore public holidays (simplified list - would come from API in production)
 const SG_PUBLIC_HOLIDAYS_2024 = [
@@ -18,12 +19,16 @@ const SG_PUBLIC_HOLIDAYS_2024 = [
 export const RosterView: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [slots, setSlots] = useState<ShiftSlot[]>([]);
+  const [roster, setRoster] = useState<Roster | null>(null);
   const [activeFlags, setActiveFlags] = useState<Flag[]>([]);
   const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
 
-  const { error: toastError } = useToast();
+  const { error: toastError, success: toastSuccess } = useToast();
+  const { confirm } = useConfirm();
 
   const today = format(new Date(), 'yyyy-MM-dd');
   const isReadOnly = selectedDate < today;
@@ -33,11 +38,13 @@ export const RosterView: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [slotsData, flagsData] = await Promise.all([
+      const [slotsData, rosterData, flagsData] = await Promise.all([
         rosterApi.getSlots(date),
+        rosterApi.getByDate(date),
         flagsApi.list({ status: 'active', date_from: date, date_to: date }),
       ]);
       setSlots(slotsData);
+      setRoster(rosterData);
       setActiveFlags(flagsData.data || []);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to load roster';
@@ -51,6 +58,64 @@ export const RosterView: React.FC = () => {
   useEffect(() => {
     loadRoster(selectedDate);
   }, [selectedDate, loadRoster]);
+
+  const runGenerate = useCallback(async (force: boolean) => {
+    setGenerating(true);
+    try {
+      const summary = await rosterApi.generate(selectedDate, force);
+      toastSuccess(
+        'Roster generated',
+        `${summary.assignments_made} of ${summary.slots_created} slots crewed` +
+          (summary.flags_raised > 0 ? ` · ${summary.flags_raised} flag(s) raised` : '')
+      );
+      await loadRoster(selectedDate);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Generation failed';
+      toastError('Generation failed', msg);
+    } finally {
+      setGenerating(false);
+    }
+  }, [selectedDate, loadRoster, toastSuccess, toastError]);
+
+  const handleGenerate = () => {
+    if (roster) {
+      confirm({
+        title: 'Regenerate roster?',
+        message:
+          `A roster already exists for ${format(parseISO(selectedDate), 'dd MMM yyyy')}. ` +
+          'Regenerating will discard its current slots, assignments, and flags, then rebuild from scratch.',
+        confirmLabel: 'Regenerate',
+        variant: 'warning',
+        onConfirm: () => runGenerate(true),
+      });
+    } else {
+      runGenerate(false);
+    }
+  };
+
+  const handlePublish = () => {
+    confirm({
+      title: 'Publish roster?',
+      message:
+        `Publishing locks the roster for ${format(parseISO(selectedDate), 'dd MMM yyyy')} ` +
+        'and notifies assigned staff. You can still handle last-minute changes afterwards.',
+      confirmLabel: 'Publish',
+      variant: 'info',
+      onConfirm: async () => {
+        setPublishing(true);
+        try {
+          await rosterApi.publish(selectedDate);
+          toastSuccess('Roster published', 'Assigned staff have been notified.');
+          await loadRoster(selectedDate);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : 'Publish failed';
+          toastError('Publish failed', msg);
+        } finally {
+          setPublishing(false);
+        }
+      },
+    });
+  };
 
   const handlePrevDay = () => setSelectedDate(format(subDays(parseISO(selectedDate), 1), 'yyyy-MM-dd'));
   const handleNextDay = () => setSelectedDate(format(addDays(parseISO(selectedDate), 1), 'yyyy-MM-dd'));
@@ -132,6 +197,12 @@ export const RosterView: React.FC = () => {
           {isReadOnly && (
             <span className="badge-gray badge text-xs">Read Only</span>
           )}
+          {roster?.published && (
+            <span className="badge-green badge text-xs">Published</span>
+          )}
+          {roster && !roster.published && !isReadOnly && (
+            <span className="badge-blue badge text-xs">Draft</span>
+          )}
           <button
             onClick={() => loadRoster(selectedDate)}
             className="btn-secondary btn-sm"
@@ -143,6 +214,32 @@ export const RosterView: React.FC = () => {
             </svg>
             Refresh
           </button>
+          {!isReadOnly && (
+            <button
+              onClick={handleGenerate}
+              className="btn-primary btn-sm"
+              disabled={generating || loading}
+            >
+              <svg className={`w-4 h-4 ${generating ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              {generating ? 'Generating…' : roster ? 'Regenerate' : 'Generate Roster'}
+            </button>
+          )}
+          {roster && !roster.published && !isReadOnly && (
+            <button
+              onClick={handlePublish}
+              className="btn-primary btn-sm"
+              disabled={publishing || generating || loading}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M5 13l4 4L19 7" />
+              </svg>
+              {publishing ? 'Publishing…' : 'Publish'}
+            </button>
+          )}
         </div>
       </div>
 

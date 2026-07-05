@@ -182,10 +182,33 @@ async function getRosterDateForSlot(slotId: string): Promise<string> {
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 
+export interface GenerationSummary {
+  roster_id: number;
+  roster_date: string;
+  slots_created: number;
+  assignments_made: number;
+  flags_raised: number;
+  errors: string[];
+}
+
 export const rosterApi = {
   getByDate: async (date: string): Promise<Roster | null> => {
     const roster = await getRosterByDate(date);
     return roster ? mapRoster(roster) : null;
+  },
+
+  /**
+   * UC-002 — Auto-generate the roster for a date. Creates shift slots for every
+   * in-service ambulance, runs the filter + ranking pipeline, auto-assigns the
+   * best crew to each slot, and raises flags for any gaps. Pass force=true to
+   * regenerate over an existing draft (wipes its slots/assignments/flags first).
+   */
+  generate: async (date: string, force = false): Promise<GenerationSummary> => {
+    const { data } = await apiClient.post<{ data: GenerationSummary }>(
+      '/api/v1/roster/generate',
+      { date, force }
+    );
+    return data.data;
   },
 
   getSlots: async (date: string): Promise<ShiftSlot[]> => {
