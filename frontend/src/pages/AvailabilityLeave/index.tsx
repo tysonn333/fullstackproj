@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
-  startOfWeek, endOfWeek, isSameMonth, isToday, parseISO, isSameDay
+  startOfWeek, endOfWeek, isSameMonth, isToday, parseISO
 } from 'date-fns';
 import { staffApi } from '../../api/staff';
 import { availabilityApi } from '../../api/availability';
 import { LeaveRequestForm } from './LeaveRequestForm';
 import { AdminApprovalPanel } from './AdminApprovalPanel';
-import { PageLoader, LoadingSpinner } from '../../components/LoadingSpinner';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
 import type { Staff, LeaveRequest, Availability } from '../../types';
 
@@ -47,7 +47,7 @@ export const AvailabilityLeave: React.FC = () => {
       })
       .catch(() => toastError('Failed to load staff list'))
       .finally(() => setLoadingStaff(false));
-  }, []);
+  }, [toastError]);
 
   // Load calendar data when staff / month changes
   const loadCalendar = useCallback(async () => {
@@ -325,8 +325,8 @@ export const AvailabilityLeave: React.FC = () => {
                       {leaveRequests.filter(r => r.status !== 'rejected').map((req) => (
                         <div key={req.id} className="flex items-center justify-between text-xs">
                           <span className="text-gray-700">
-                            {format(new Date(req.start_date), 'dd MMM')}
-                            {req.start_date !== req.end_date && ` — ${format(new Date(req.end_date), 'dd MMM')}`}
+                            {format(parseISO(req.start_date), 'dd MMM')}
+                            {req.start_date !== req.end_date && ` — ${format(parseISO(req.end_date), 'dd MMM')}`}
                           </span>
                           <div className="flex items-center gap-2">
                             <span className={`badge ${leaveTypeColors[req.leave_type]} text-[10px]`}>

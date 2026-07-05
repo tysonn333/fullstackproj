@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { format, differenceInDays } from 'date-fns';
 import { staffApi } from '../../api/staff';
 import { useToast } from '../../components/Toast';
@@ -26,11 +26,16 @@ const INITIAL_FORM: CertForm = {
 };
 
 const getCertStatus = (expiresAt: string) => {
-  const days = differenceInDays(new Date(expiresAt), new Date());
+  const expiry = new Date(expiresAt);
+  // Certs can have no expiry date recorded — don't crash on Invalid Date
+  if (!expiresAt || isNaN(expiry.getTime())) {
+    return { label: 'No expiry', class: 'badge-gray', days: Infinity };
+  }
+  const days = differenceInDays(expiry, new Date());
   if (days < 0) return { label: 'Expired', class: 'badge-red', days };
   if (days <= 30) return { label: `${days}d left`, class: 'badge-red', days };
   if (days <= 90) return { label: `${days}d left`, class: 'badge-yellow', days };
-  return { label: format(new Date(expiresAt), 'dd MMM yyyy'), class: 'badge-green', days };
+  return { label: format(expiry, 'dd MMM yyyy'), class: 'badge-green', days };
 };
 
 export const CertificationsPanel: React.FC<CertificationsPanelProps> = ({ staffId, staffName }) => {
@@ -44,11 +49,7 @@ export const CertificationsPanel: React.FC<CertificationsPanelProps> = ({ staffI
   const { success, error: toastError } = useToast();
   const { confirm } = useConfirm();
 
-  useEffect(() => {
-    loadCerts();
-  }, [staffId]);
-
-  const loadCerts = async () => {
+  const loadCerts = useCallback(async () => {
     setLoading(true);
     try {
       const data = await staffApi.getCertifications(staffId);
@@ -58,7 +59,11 @@ export const CertificationsPanel: React.FC<CertificationsPanelProps> = ({ staffI
     } finally {
       setLoading(false);
     }
-  };
+  }, [staffId, toastError]);
+
+  useEffect(() => {
+    loadCerts();
+  }, [loadCerts]);
 
   const validateForm = (): boolean => {
     const errors: Partial<CertForm> = {};
@@ -229,9 +234,11 @@ export const CertificationsPanel: React.FC<CertificationsPanelProps> = ({ staffI
                   {cert.cert_number && (
                     <p className="text-xs text-gray-500 mt-0.5">#{cert.cert_number}</p>
                   )}
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    Issued: {format(new Date(cert.issued_at), 'dd MMM yyyy')}
-                  </p>
+                  {cert.issued_at && !isNaN(new Date(cert.issued_at).getTime()) && (
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Issued: {format(new Date(cert.issued_at), 'dd MMM yyyy')}
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={() => handleRemove(cert)}

@@ -8,6 +8,9 @@
 import {
   isCertEligible,
   timeToMinutes,
+  isOvernight,
+  shiftDurationMinutes,
+  shiftEndDateTime,
   filterCandidates,
   ShiftSlot,
   StaffCandidate,
@@ -144,6 +147,35 @@ describe('timeToMinutes()', () => {
 
   it('converts 23:59 to 1439', () => {
     expect(timeToMinutes('23:59')).toBe(1439);
+  });
+});
+
+describe('overnight shift helpers', () => {
+  it('detects the night shift (18:00 → 06:00) as overnight', () => {
+    expect(isOvernight('18:00:00', '06:00:00')).toBe(true);
+  });
+
+  it('does not treat the day shift (06:00 → 18:00) as overnight', () => {
+    expect(isOvernight('06:00:00', '18:00:00')).toBe(false);
+  });
+
+  it('computes a 12h duration for both day and night shifts', () => {
+    expect(shiftDurationMinutes('06:00:00', '18:00:00')).toBe(720);
+    expect(shiftDurationMinutes('18:00:00', '06:00:00')).toBe(720);
+  });
+
+  it('computes shorter overnight durations correctly', () => {
+    expect(shiftDurationMinutes('22:00:00', '02:00:00')).toBe(240);
+  });
+
+  it('rolls the end of an overnight shift to the next day', () => {
+    const end = shiftEndDateTime('2025-06-15', '18:00:00', '06:00:00');
+    expect(end.getTime()).toBe(new Date('2025-06-16T06:00:00').getTime());
+  });
+
+  it('keeps the end of a same-day shift on the same day', () => {
+    const end = shiftEndDateTime('2025-06-15', '06:00:00', '18:00:00');
+    expect(end.getTime()).toBe(new Date('2025-06-15T18:00:00').getTime());
   });
 });
 

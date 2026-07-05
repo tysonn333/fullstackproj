@@ -92,7 +92,8 @@ export async function createLeaveRequest(
  */
 export async function approveLeave(
   leaveId: number,
-  approvedBy: string
+  approvedBy: string,
+  notes?: string
 ): Promise<{ leave: LeaveRequest; conflicts: number[] }> {
   const { data: leave, error: fetchErr } = await supabaseAdmin
     .from('leave_requests')
@@ -150,13 +151,18 @@ export async function approveLeave(
     entity_id: leaveId,
     action: 'approve',
     actor_id: approvedBy,
-    details: { leave_id: leaveId, staff_id: leave.staff_id, conflict_assignments: conflictAssignmentIds },
+    details: {
+      leave_id: leaveId,
+      staff_id: leave.staff_id,
+      conflict_assignments: conflictAssignmentIds,
+      notes: notes ?? '',
+    },
   });
 
   await sendNotification({
     staffId: leave.staff_id,
     type: 'leave_approved',
-    message: `Your leave request from ${leave.start_date} to ${leave.end_date} has been approved.`,
+    message: `Your leave request from ${leave.start_date} to ${leave.end_date} has been approved.${notes ? ` Notes: ${notes}` : ''}`,
     data: { leave_id: leaveId },
   });
 

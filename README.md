@@ -132,6 +132,11 @@ Copy `.env.example` to `.env` and fill in each value before running the project.
 
 This creates all tables, constraints, and indexes.
 
+> **Created your database from an older schema.sql?** Run
+> `docs/migrations/2026-07-05-allow-overnight-shifts.sql` in the SQL Editor.
+> The original schema rejected overnight shift slots (18:00 → 06:00), which
+> made roster generation fail on every call.
+
 ### 2. Seed initial data (optional)
 
 1. In the same SQL Editor, open `docs/seed.sql`, paste the contents, and click **Run**.

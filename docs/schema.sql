@@ -113,7 +113,9 @@ CREATE TABLE shift_slots (
     service_type  VARCHAR(10) NOT NULL CHECK (service_type IN ('MTS', 'EAS')),
     crew_position VARCHAR(15) NOT NULL
                   CHECK (crew_position IN ('driver', 'attendant')),
-    CHECK (end_time > start_time)
+    -- end_time <= start_time means the shift crosses midnight (e.g. the
+    -- night shift 18:00 → 06:00); only zero-length shifts are invalid.
+    CHECK (end_time <> start_time)
 );
 
 -- assignments

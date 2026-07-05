@@ -4,7 +4,7 @@ import { FlagCard } from './FlagCard';
 import { BulkActionModal } from './BulkActionModal';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
-import type { Flag, FlagFilters, FlagSeverity, FlagType, FlagStatus } from '../../types';
+import type { Flag, FlagFilters, FlagSeverity, FlagType } from '../../types';
 
 const REFRESH_INTERVAL = 30_000;
 

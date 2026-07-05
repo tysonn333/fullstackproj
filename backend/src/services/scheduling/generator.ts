@@ -37,7 +37,7 @@ interface GenerateResult {
 const DAY_SHIFT_START = '06:00:00';
 const DAY_SHIFT_END = '18:00:00';
 const NIGHT_SHIFT_START = '18:00:00';
-const NIGHT_SHIFT_END = '06:00:00'; // next day — handled as 30:00 in scheduling logic
+const NIGHT_SHIFT_END = '06:00:00'; // next day — end_time <= start_time marks an overnight shift
 
 async function upsertRoster(rosterDate: string, force: boolean): Promise<number> {
   // Check for existing roster

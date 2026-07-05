@@ -22,6 +22,10 @@ interface AssignmentRow {
     full_name?: string;
     role?: Staff['role'];
     employment_type?: Staff['employment_type'];
+    phone?: string | null;
+    email?: string | null;
+    home_postal?: string | null;
+    status?: Staff['status'];
   } | null;
 }
 
@@ -99,12 +103,12 @@ function mapNestedStaff(a: AssignmentRow): Staff | undefined {
   return {
     id: String(a.staff_id),
     name: a.staff.full_name,
-    phone: '',
-    email: '',
+    phone: a.staff.phone ?? '',
+    email: a.staff.email ?? '',
     role: a.staff.role ?? 'driver',
     employment_type: a.staff.employment_type ?? 'full_time',
-    home_postal: '',
-    status: 'active',
+    home_postal: a.staff.home_postal ?? '',
+    status: a.staff.status ?? 'active',
     created_at: '',
     updated_at: '',
   };
@@ -122,6 +126,17 @@ function mapAssignment(a: AssignmentRow, slotId: number): Assignment {
   };
 }
 
+function slotStatus(row: SlotRow, rosterDate: string, assignmentCount: number): ShiftSlot['status'] {
+  if (assignmentCount === 0) return 'unfilled';
+  const now = new Date();
+  const start = new Date(`${rosterDate}T${row.start_time}`);
+  const end = new Date(`${rosterDate}T${row.end_time}`);
+  if (end <= start) end.setDate(end.getDate() + 1); // overnight shift
+  if (now >= end) return 'completed';
+  if (now >= start) return 'active';
+  return 'scheduled';
+}
+
 function mapSlot(row: SlotRow, rosterDate: string): ShiftSlot {
   const assignments = (row.assignments ?? [])
     .filter((a) => a.status !== 'cancelled')
@@ -135,7 +150,7 @@ function mapSlot(row: SlotRow, rosterDate: string): ShiftSlot {
     shift_end: row.end_time,
     job_type: row.service_type as JobType,
     required_role: row.crew_position === 'driver' ? 'driver' : 'medic',
-    status: assignments.length === 0 ? 'unfilled' : 'scheduled',
+    status: slotStatus(row, rosterDate, assignments.length),
     assignments,
   };
 }
@@ -237,21 +252,16 @@ export const rosterApi = {
   },
 
   /**
-   * Marks the currently-assigned staff on a slot as dropped. The backend has no
-   * standalone "drop" endpoint — the cancellation of the previous assignment is
-   * handled atomically by the reassign endpoint used in confirmSwap(). This is a
-   * client-side acknowledgement so the UI can advance to candidate selection; its
-   * return value is not consumed by the caller.
+   * Marks the currently-assigned staff on a slot as dropped by cancelling
+   * their assignment. The subsequent confirmSwap() fills the slot again via
+   * the reassign endpoint.
    */
-  flagDropped: async (slotId: string, staffId: string, _reason?: string): Promise<Assignment> => {
-    return {
-      id: '',
-      slot_id: slotId,
-      staff_id: staffId,
-      status: 'dropped',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+  flagDropped: async (assignmentId: string, slotId: string): Promise<Assignment> => {
+    const { data } = await apiClient.put<{ data: AssignmentRow }>(
+      `/api/v1/assignments/${assignmentId}`,
+      { status: 'cancelled' }
+    );
+    return mapAssignment(data.data, Number(slotId));
   },
 
   confirmSwap: async (slotId: string, newStaffId: string, reason?: string): Promise<Assignment> => {

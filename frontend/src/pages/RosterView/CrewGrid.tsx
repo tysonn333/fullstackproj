@@ -48,7 +48,10 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
 }) => {
   const [expandedSlot, setExpandedSlot] = useState<string | null>(null);
 
-  const displaySlots = isWeekendOrHoliday ? slots.slice(0, 2) : slots;
+  // Show everything the roster actually contains — hiding slots client-side
+  // would contradict the stats bar and mask unfilled shifts. Any weekend/PH
+  // ambulance reduction happens at generation time on the backend.
+  const displaySlots = slots;
 
   return (
     <div className="flex gap-4">
@@ -60,7 +63,7 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
             </svg>
-            Weekend / Public Holiday — Reduced to 2 ambulances
+            Weekend / Public Holiday schedule
           </div>
         )}
 

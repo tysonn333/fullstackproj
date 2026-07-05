@@ -127,6 +127,7 @@ export const ConfirmDialogProvider: React.FC<{ children: React.ReactNode }> = ({
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
+// eslint-disable-next-line react-refresh/only-export-components -- provider + hook intentionally share this file
 export const useConfirm = (): ConfirmDialogContextValue => {
   const ctx = useContext(ConfirmDialogContext);
   if (!ctx) throw new Error('useConfirm must be used within ConfirmDialogProvider');

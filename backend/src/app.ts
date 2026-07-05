@@ -50,7 +50,7 @@ app.use(`${API}/staff`, staffRoutes);
 app.use(`${API}`, availabilityRoutes);        // Handles /api/v1/staff/:id/availability and /api/v1/integrations/...
 app.use(`${API}/leave`, leaveRoutes);
 app.use(`${API}/roster`, rosterRoutes);
-app.use(`${API}`, assignmentRoutes);          // Handles /api/v1/slots/... and /api/v1/assignments/... and /api/v1/roster/:id/reassign/...
+app.use(`${API}`, assignmentRoutes);          // Handles /api/v1/slots/..., /api/v1/assignments/..., and /api/v1/:id/reassign/... (no /roster segment — the frontend calls it this way)
 app.use(`${API}/flags`, flagsRoutes);
 app.use(`${API}/jobs`, jobsRoutes);
 
