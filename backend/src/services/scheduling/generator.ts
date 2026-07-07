@@ -176,8 +176,17 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
 
   slotsCreated = insertedSlots.length;
 
-  // Step 4: Auto-assign for each slot
-  for (const slot of insertedSlots as ShiftSlot[]) {
+  // Step 4: Auto-assign for each slot.
+  // Fill the most constrained slots first: EAS shifts can only be crewed by
+  // drivers/paramedics, whereas MTS shifts accept every role. Assigning EAS
+  // first stops the greedy picker from spending scarce EAS-capable staff on
+  // MTS slots that anyone could have covered, which maximises overall coverage.
+  const serviceRank = (s: string): number => (s === 'EAS' ? 0 : 1);
+  const orderedSlots = [...(insertedSlots as ShiftSlot[])].sort(
+    (a, b) => serviceRank(a.service_type) - serviceRank(b.service_type)
+  );
+
+  for (const slot of orderedSlots) {
     try {
       const filterResults = await getEligibleCandidates(slot, rosterDate);
       const ranked = await rankCandidates(filterResults, slot, rosterDate);
