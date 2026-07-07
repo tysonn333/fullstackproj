@@ -38,7 +38,8 @@ interface SlotRow {
   service_type: string;
   crew_position: string;
   ambulances?: { registration?: string; service_type?: string } | null;
-  assignments?: AssignmentRow[] | null;
+  // PostgREST embeds this as a single object (UNIQUE slot_id) or null, not an array.
+  assignments?: AssignmentRow[] | AssignmentRow | null;
 }
 
 interface RankedCandidateRow {
@@ -138,7 +139,14 @@ function slotStatus(row: SlotRow, rosterDate: string, assignmentCount: number): 
 }
 
 function mapSlot(row: SlotRow, rosterDate: string): ShiftSlot {
-  const assignments = (row.assignments ?? [])
+  // Because assignments has a UNIQUE(slot_id) constraint, PostgREST embeds it
+  // as a single object (or null) rather than an array — normalize to an array.
+  const rawAssignments = Array.isArray(row.assignments)
+    ? row.assignments
+    : row.assignments
+    ? [row.assignments]
+    : [];
+  const assignments = rawAssignments
     .filter((a) => a.status !== 'cancelled')
     .map((a) => mapAssignment(a, row.slot_id));
   return {
