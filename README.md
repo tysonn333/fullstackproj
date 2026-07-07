@@ -143,8 +143,13 @@ This creates all tables, constraints, and indexes.
 
 This inserts:
 - 3 ambulances (AMB-001 MTS, AMB-002 EAS, AMB-003 both)
-- 5 staff members with certifications
+- 20 staff members with certifications (12 EAS-capable drivers/paramedics +
+  8 MTS-only medics/EMTs) — enough to fully crew day + night shifts across all
+  three ambulances with a small buffer
 - Availability records for all staff for today and the next 7 days
+
+The seed script is safe to re-run: it resets all operational data first (but
+leaves your `profiles` / login accounts intact).
 
 ---
 

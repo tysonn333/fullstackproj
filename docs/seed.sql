@@ -1,7 +1,35 @@
 -- =============================================================
 -- EFAR Ambulance Scheduling System – Seed Data
--- Run AFTER schema.sql in the Supabase SQL Editor
+-- Run AFTER schema.sql in the Supabase SQL Editor.
+--
+-- Safe to re-run: it clears all operational data first (staff, rosters,
+-- assignments, flags, etc.) and reseeds from scratch. It does NOT touch the
+-- `profiles` table, so your login accounts are preserved.
+--
+-- Staffing is sized to fully crew 3 ambulances running day + night shifts
+-- (16 slots/day) with a small buffer:
+--   • 8 drivers + 4 paramedics  → 12 staff certified for EAS *and* MTS
+--   • 4 medics  + 4 EMTs        →  8 staff certified for MTS only
+-- EAS shifts can only be filled by drivers/paramedics, so keeping 12 of them
+-- comfortably covers the 8 EAS slots/day, and the remaining staff cover MTS.
 -- =============================================================
+
+-- -------------------------------------------------------------
+-- Reset operational data (keeps profiles / auth users)
+-- -------------------------------------------------------------
+TRUNCATE
+    ambulances,
+    staff,
+    staff_certifications,
+    availability,
+    leave_requests,
+    rosters,
+    shift_slots,
+    assignments,
+    flags,
+    audit_log,
+    jobs
+RESTART IDENTITY CASCADE;
 
 -- -------------------------------------------------------------
 -- Ambulances
@@ -13,37 +41,53 @@ INSERT INTO ambulances (registration, service_type, status) VALUES
 
 -- -------------------------------------------------------------
 -- Staff
+-- IDs 1–8   : MTS-only staff (medics + EMTs)
+-- IDs 9–20  : EAS-capable staff (drivers + paramedics)
+-- The ordering helps the scheduler assign MTS-only staff to MTS slots and
+-- reserve drivers/paramedics for EAS.
 -- -------------------------------------------------------------
 INSERT INTO staff (full_name, phone, email, role, employment_type, home_postal, status) VALUES
-    ('John Tan',   '+65 9100 0001', 'john.tan@efar.sg',   'driver',    'full_time',  '238859', 'active'),
-    ('Mary Lim',   '+65 9100 0002', 'mary.lim@efar.sg',   'medic',     'full_time',  '018989', 'active'),
-    ('Ahmad Bin',  '+65 9100 0003', 'ahmad.bin@efar.sg',  'emt',       'full_time',  '560231', 'active'),
-    ('Sarah Wong', '+65 9100 0004', 'sarah.wong@efar.sg', 'paramedic', 'full_time',  '408600', 'active'),
-    ('Kevin Ng',   '+65 9100 0005', 'kevin.ng@efar.sg',   'driver',    'part_time',  '310123', 'active');
+    -- MTS-only (medics + EMTs)
+    ('Mary Lim',      '+65 9100 0001', 'mary.lim@efar.sg',      'medic',     'full_time', '018989', 'active'),
+    ('Ahmad Bin',     '+65 9100 0002', 'ahmad.bin@efar.sg',     'emt',       'full_time', '560231', 'active'),
+    ('Priya Nair',    '+65 9100 0003', 'priya.nair@efar.sg',    'medic',     'full_time', '150072', 'active'),
+    ('Daniel Goh',    '+65 9100 0004', 'daniel.goh@efar.sg',    'emt',       'full_time', '520201', 'active'),
+    ('Siti Rahim',    '+65 9100 0005', 'siti.rahim@efar.sg',    'medic',     'part_time', '640210', 'active'),
+    ('Marcus Teo',    '+65 9100 0006', 'marcus.teo@efar.sg',    'emt',       'full_time', '129588', 'active'),
+    ('Grace Chua',    '+65 9100 0007', 'grace.chua@efar.sg',    'medic',     'full_time', '310450', 'active'),
+    ('Farid Hassan',  '+65 9100 0008', 'farid.hassan@efar.sg',  'emt',       'part_time', '760123', 'active'),
+    -- EAS-capable (drivers)
+    ('John Tan',      '+65 9100 0009', 'john.tan@efar.sg',      'driver',    'full_time', '238859', 'active'),
+    ('Kevin Ng',      '+65 9100 0010', 'kevin.ng@efar.sg',      'driver',    'full_time', '310123', 'active'),
+    ('Raj Kumar',     '+65 9100 0011', 'raj.kumar@efar.sg',     'driver',    'full_time', '090111', 'active'),
+    ('Wei Jie Lee',   '+65 9100 0012', 'weijie.lee@efar.sg',    'driver',    'full_time', '460022', 'active'),
+    ('Hafiz Osman',   '+65 9100 0013', 'hafiz.osman@efar.sg',   'driver',    'full_time', '510388', 'active'),
+    ('Benjamin Koh',  '+65 9100 0014', 'ben.koh@efar.sg',       'driver',    'part_time', '218041', 'active'),
+    ('Nurul Aini',    '+65 9100 0015', 'nurul.aini@efar.sg',    'driver',    'full_time', '387123', 'active'),
+    ('Terrence Sim',  '+65 9100 0016', 'terrence.sim@efar.sg',  'driver',    'part_time', '640455', 'active'),
+    -- EAS-capable (paramedics)
+    ('Sarah Wong',    '+65 9100 0017', 'sarah.wong@efar.sg',    'paramedic', 'full_time', '408600', 'active'),
+    ('Aisha Yusof',   '+65 9100 0018', 'aisha.yusof@efar.sg',   'paramedic', 'full_time', '120333', 'active'),
+    ('Ryan Chen',     '+65 9100 0019', 'ryan.chen@efar.sg',     'paramedic', 'full_time', '270901', 'active'),
+    ('Melissa Ong',   '+65 9100 0020', 'melissa.ong@efar.sg',   'paramedic', 'part_time', '550218', 'active');
 
 -- -------------------------------------------------------------
 -- Staff Certifications
--- MTS certification for all staff
--- EAS certification for paramedic and drivers
+-- MTS certification for everyone; EAS certification for drivers & paramedics.
+-- Dates are relative to today so certs never appear expired.
 -- -------------------------------------------------------------
+INSERT INTO staff_certifications (staff_id, cert_name, issued_date, expiry_date)
+SELECT staff_id, 'MTS', CURRENT_DATE - INTERVAL '1 year', CURRENT_DATE + INTERVAL '2 years'
+FROM staff;
 
--- MTS for all
-INSERT INTO staff_certifications (staff_id, cert_name, issued_date, expiry_date) VALUES
-    (1, 'MTS', '2023-01-15', '2026-01-14'),  -- John Tan
-    (2, 'MTS', '2023-02-20', '2026-02-19'),  -- Mary Lim
-    (3, 'MTS', '2023-03-10', '2026-03-09'),  -- Ahmad Bin
-    (4, 'MTS', '2023-04-05', '2026-04-04'),  -- Sarah Wong
-    (5, 'MTS', '2023-05-18', '2026-05-17');  -- Kevin Ng
-
--- EAS for paramedic and drivers
-INSERT INTO staff_certifications (staff_id, cert_name, issued_date, expiry_date) VALUES
-    (4, 'EAS', '2022-06-01', '2025-05-31'),  -- Sarah Wong (paramedic)
-    (1, 'EAS', '2022-07-12', '2025-07-11'),  -- John Tan   (driver)
-    (5, 'EAS', '2022-08-25', '2025-08-24');  -- Kevin Ng   (driver)
+INSERT INTO staff_certifications (staff_id, cert_name, issued_date, expiry_date)
+SELECT staff_id, 'EAS', CURRENT_DATE - INTERVAL '1 year', CURRENT_DATE + INTERVAL '2 years'
+FROM staff
+WHERE role IN ('driver', 'paramedic');
 
 -- -------------------------------------------------------------
--- Availability – all 5 staff available today and for the next
--- 7 days (8 days total: today + 7 future dates)
+-- Availability – all staff available today and for the next 7 days
+-- (8 days total: today + 7 future dates)
 -- -------------------------------------------------------------
 INSERT INTO availability (staff_id, work_date, is_available, source)
 SELECT
@@ -53,6 +97,4 @@ SELECT
     'app'
 FROM
     staff s
-    CROSS JOIN (
-        SELECT generate_series(0, 7) AS n
-    ) AS offset_days;
+    CROSS JOIN (SELECT generate_series(0, 7) AS n) AS offset_days;
