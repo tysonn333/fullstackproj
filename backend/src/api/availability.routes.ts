@@ -1,6 +1,6 @@
 import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { authenticate, ensureSelfOrAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { logAudit } from '../services/audit.service';
 import { parseWhatsAppMessage } from '../integrations/whatsapp';
 
@@ -51,6 +51,9 @@ router.post(
         res.status(400).json({ error: 'work_date and is_available are required' });
         return;
       }
+
+      // Employees may only set their own availability; admins may set anyone's.
+      if (!ensureSelfOrAdmin(req, res, staffId)) return;
 
       // Upsert — one availability record per staff per day
       const { data, error } = await supabaseAdmin

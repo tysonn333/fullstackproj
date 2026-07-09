@@ -151,6 +151,25 @@ This inserts:
 The seed script is safe to re-run: it resets all operational data first (but
 leaves your `profiles` / login accounts intact).
 
+### 3. Roles & access
+
+Every login account has a role in the `profiles` table:
+
+| Role | Can do |
+|------|--------|
+| `admin` | Everything: generate/publish rosters, manage staff & certifications, approve/reject leave, resolve flags, reassign shifts, export |
+| `employee` | Self-service only: view the roster, submit **their own** availability, and request **their own** leave |
+
+New accounts default to `employee` (least privilege). To make someone an admin,
+set their `profiles.role` to `admin` in the Supabase dashboard. Employee accounts
+are linked to a staff record automatically when their login email matches a staff
+email (or set `profiles.staff_id` manually).
+
+> **Upgrading an existing database?** If your `profiles` table still uses the old
+> `admin`/`ops_director` roles, run
+> `docs/migrations/2026-07-09-roles-and-staff-link.sql` (edit the admin email
+> inside it first) to switch to the `admin`/`employee` model and add the staff link.
+
 ---
 
 ## Deployment

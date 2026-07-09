@@ -1,6 +1,6 @@
 import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { authenticate, requireAdmin, ensureSelfOrAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { createLeaveRequest, approveLeave, rejectLeave } from '../services/leave.service';
 
 const router = Router();
@@ -37,12 +37,16 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
  */
 router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const { staff_id, start_date, end_date, leave_type, reason } = req.body;
+    const { start_date, end_date, leave_type, reason } = req.body;
+    const staff_id = Number(req.body.staff_id);
 
     if (!staff_id || !start_date || !end_date || !leave_type) {
       res.status(400).json({ error: 'staff_id, start_date, end_date, and leave_type are required' });
       return;
     }
+
+    // Employees may only file leave for themselves; admins for anyone.
+    if (!ensureSelfOrAdmin(req, res, staff_id)) return;
 
     const validLeaveTypes = ['full_day', 'half_am', 'half_pm'];
     if (!validLeaveTypes.includes(leave_type)) {
@@ -62,10 +66,10 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
 });
 
 /**
- * PUT /api/v1/leave/:id/approve
+ * PUT /api/v1/leave/:id/approve  (admin only)
  * Body: { notes? }
  */
-router.put('/:id/approve', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.put('/:id/approve', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const leaveId = parseInt(req.params.id, 10);
     const { notes } = req.body;
@@ -94,10 +98,10 @@ router.put('/:id/approve', async (req: AuthenticatedRequest, res: Response, next
 });
 
 /**
- * PUT /api/v1/leave/:id/reject
+ * PUT /api/v1/leave/:id/reject  (admin only)
  * Body: { reason? }
  */
-router.put('/:id/reject', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.put('/:id/reject', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const leaveId = parseInt(req.params.id, 10);
     const { reason } = req.body;

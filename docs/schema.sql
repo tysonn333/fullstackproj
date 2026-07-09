@@ -3,12 +3,20 @@
 -- Run this in the Supabase SQL Editor (Dashboard → SQL Editor)
 -- =============================================================
 
--- profiles
+-- profiles (login accounts; one per Supabase auth user)
+--   role = 'admin'    → full access (roster generation, staff management,
+--                        leave approval, flag resolution, reassignment)
+--   role = 'employee' → self-service only (view roster, submit own
+--                        availability and leave requests)
+-- New accounts default to 'employee' — grant admin explicitly.
+-- staff_id links an employee's login to their staff record (set below,
+-- after the staff table exists).
 CREATE TABLE profiles (
     id         UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     name       VARCHAR(120) NOT NULL,
-    role       VARCHAR(20) NOT NULL DEFAULT 'admin'
-               CHECK (role IN ('admin', 'ops_director')),
+    role       VARCHAR(20) NOT NULL DEFAULT 'employee'
+               CHECK (role IN ('admin', 'employee')),
+    staff_id   INT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -28,6 +36,11 @@ CREATE TABLE staff (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Link a login account to its staff record (defined here now that staff exists)
+ALTER TABLE profiles
+    ADD CONSTRAINT profiles_staff_id_fkey
+    FOREIGN KEY (staff_id) REFERENCES staff(staff_id) ON DELETE SET NULL;
 
 -- staff_certifications
 CREATE TABLE staff_certifications (

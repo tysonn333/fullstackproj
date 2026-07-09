@@ -105,7 +105,7 @@ const App: React.FC = () => {
               <Route
                 path="/staff"
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute requireAdmin>
                     <AppLayout>
                       <StaffManagement />
                     </AppLayout>
@@ -125,7 +125,7 @@ const App: React.FC = () => {
               <Route
                 path="/exceptions"
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute requireAdmin>
                     <AppLayout>
                       <ExceptionsPanel />
                     </AppLayout>
@@ -135,7 +135,7 @@ const App: React.FC = () => {
               <Route
                 path="/last-minute"
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute requireAdmin>
                     <AppLayout>
                       <LastMinuteChange />
                     </AppLayout>
