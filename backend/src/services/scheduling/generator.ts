@@ -6,8 +6,13 @@
  * Strategy:
  *   1. Create (or reuse draft) a roster row for the date.
  *   2. Fetch all ambulances in service on that date.
- *   3. For each ambulance generate two shift slots (day 06:00–18:00, night 18:00–06:00)
- *      for each crew position (driver, attendant), respecting the ambulance service_type.
+ *   3. For each ambulance generate a day and a night shift slot for each crew
+ *      position (driver, attendant), respecting the ambulance service_type. The
+ *      shift timings are NOT fixed 06:00–18:00 / 18:00–06:00 blocks — each
+ *      ambulance runs an irregular band (e.g. 07:00–17:00, 09:00–21:00,
+ *      20:00–08:00) chosen deterministically per ambulance so the roster
+ *      mirrors the real operational timings instead of forcing every crew onto
+ *      the same rigid hours.
  *   4. For each slot, run the filter + ranking pipeline and auto-assign the top-ranked
  *      eligible candidate.
  *   5. Where no candidate is available, leave the slot unassigned and raise a coverage_gap flag.
@@ -34,10 +39,41 @@ interface GenerateResult {
   errors: string[];
 }
 
-const DAY_SHIFT_START = '06:00:00';
-const DAY_SHIFT_END = '18:00:00';
-const NIGHT_SHIFT_START = '18:00:00';
-const NIGHT_SHIFT_END = '06:00:00'; // next day — end_time <= start_time marks an overnight shift
+/**
+ * Irregular shift bands taken from the operational roster. Ambulances do not
+ * all run the same 06:00–18:00 / 18:00–06:00 blocks; each crew works a band that
+ * varies by ambulance. A pattern pairs a daytime band with an overnight band so
+ * every ambulance still has round-the-clock coverage, just on its own timings.
+ *
+ * All bands stay within the 12-hour daily cap enforced by the filter pipeline.
+ * Overnight bands have end_time <= start_time, which the pipeline treats as
+ * crossing midnight.
+ */
+interface ShiftPattern {
+  day: { start: string; end: string };
+  night: { start: string; end: string };
+}
+
+const SHIFT_PATTERNS: ShiftPattern[] = [
+  { day: { start: '07:00:00', end: '17:00:00' }, night: { start: '19:00:00', end: '07:00:00' } },
+  { day: { start: '07:30:00', end: '17:30:00' }, night: { start: '20:00:00', end: '08:00:00' } },
+  { day: { start: '08:00:00', end: '18:00:00' }, night: { start: '18:00:00', end: '06:00:00' } },
+  { day: { start: '08:30:00', end: '18:30:00' }, night: { start: '20:30:00', end: '08:30:00' } },
+  { day: { start: '09:00:00', end: '19:00:00' }, night: { start: '21:00:00', end: '09:00:00' } },
+  { day: { start: '09:00:00', end: '21:00:00' }, night: { start: '19:30:00', end: '07:30:00' } },
+  { day: { start: '10:00:00', end: '20:00:00' }, night: { start: '18:30:00', end: '06:30:00' } },
+  { day: { start: '10:30:00', end: '20:30:00' }, night: { start: '21:30:00', end: '09:30:00' } },
+];
+
+/**
+ * Picks a stable irregular shift pattern for an ambulance. Keyed off the
+ * ambulance id so regenerating the same roster keeps each ambulance on the same
+ * timings rather than shuffling them on every run.
+ */
+function shiftPatternForAmbulance(ambulanceId: number): ShiftPattern {
+  const index = ((ambulanceId % SHIFT_PATTERNS.length) + SHIFT_PATTERNS.length) % SHIFT_PATTERNS.length;
+  return SHIFT_PATTERNS[index];
+}
 
 async function upsertRoster(rosterDate: string, force: boolean): Promise<number> {
   // Check for existing roster
@@ -140,14 +176,18 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
     const serviceTypes: Array<'MTS' | 'EAS'> =
       amb.service_type === 'both' ? ['MTS', 'EAS'] : [amb.service_type as 'MTS' | 'EAS'];
 
+    // Each ambulance runs its own irregular day/night band rather than the
+    // fixed 06:00–18:00 / 18:00–06:00 blocks.
+    const pattern = shiftPatternForAmbulance(amb.ambulance_id);
+
     for (const svcType of serviceTypes) {
       for (const position of ['driver', 'attendant'] as const) {
         // Day shift
         slotsToCreate.push({
           roster_id: rosterId,
           ambulance_id: amb.ambulance_id,
-          start_time: DAY_SHIFT_START,
-          end_time: DAY_SHIFT_END,
+          start_time: pattern.day.start,
+          end_time: pattern.day.end,
           service_type: svcType,
           crew_position: position,
         });
@@ -155,8 +195,8 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
         slotsToCreate.push({
           roster_id: rosterId,
           ambulance_id: amb.ambulance_id,
-          start_time: NIGHT_SHIFT_START,
-          end_time: NIGHT_SHIFT_END,
+          start_time: pattern.night.start,
+          end_time: pattern.night.end,
           service_type: svcType,
           crew_position: position,
         });

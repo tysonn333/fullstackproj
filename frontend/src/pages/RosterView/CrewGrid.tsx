@@ -30,12 +30,20 @@ const roleBadge: Record<string, string> = {
   paramedic: 'bg-orange-100 text-orange-700',
 };
 
+function toMinutes(t: string): number {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
 function calcHours(start: string, end: string): number {
-  const [sh, sm] = start.split(':').map(Number);
-  const [eh, em] = end.split(':').map(Number);
-  let diff = (eh * 60 + em) - (sh * 60 + sm);
+  let diff = toMinutes(end) - toMinutes(start);
   if (diff < 0) diff += 24 * 60;
   return parseFloat((diff / 60).toFixed(1));
+}
+
+// A shift whose end is at or before its start crosses midnight (e.g. 20:00–08:00).
+function isOvernight(start: string, end: string): boolean {
+  return toMinutes(end) <= toMinutes(start);
 }
 
 export const CrewGrid: React.FC<CrewGridProps> = ({
@@ -94,6 +102,9 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
               const hours = slot.shift_start && slot.shift_end
                 ? calcHours(slot.shift_start, slot.shift_end)
                 : null;
+              const overnight = slot.shift_start && slot.shift_end
+                ? isOvernight(slot.shift_start, slot.shift_end)
+                : false;
               const assignments = slot.assignments || [];
               const hasConsecutiveWarning = assignments.some((a) =>
                 (a.staff as Staff & { consecutive_days?: number })?.consecutive_days !== undefined &&
@@ -125,11 +136,20 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                       {slot.job_type}
                     </span>
 
-                    {/* Shift time */}
-                    <div className="flex-shrink-0 text-sm text-gray-700">
+                    {/* Shift time — timings are irregular per ambulance, so show
+                        the exact band plus a marker when it crosses midnight. */}
+                    <div className="flex-shrink-0 text-sm text-gray-700 w-40">
                       <span className="font-medium">{slot.shift_start?.slice(0, 5)}</span>
                       <span className="text-gray-400 mx-1">—</span>
                       <span className="font-medium">{slot.shift_end?.slice(0, 5)}</span>
+                      {overnight && (
+                        <span
+                          className="text-[10px] text-indigo-500 align-super ml-0.5"
+                          title="Ends the next day (overnight shift)"
+                        >
+                          +1
+                        </span>
+                      )}
                       {hours && (
                         <span className="text-xs text-gray-400 ml-1">({hours}h)</span>
                       )}
@@ -201,6 +221,14 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                         <div>
                           <p className="text-xs text-gray-500 mb-1">Date</p>
                           <p className="font-medium text-gray-800">{slot.shift_date}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Shift Time</p>
+                          <p className="font-medium text-gray-800">
+                            {slot.shift_start?.slice(0, 5)} – {slot.shift_end?.slice(0, 5)}
+                            {overnight && <span className="text-indigo-500"> (+1d)</span>}
+                            {hours && <span className="text-gray-400"> · {hours}h</span>}
+                          </p>
                         </div>
                         <div>
                           <p className="text-xs text-gray-500 mb-1">Assigned Staff</p>
