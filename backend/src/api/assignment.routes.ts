@@ -303,6 +303,85 @@ router.put('/assignments/:id', requireAdmin, async (req: AuthenticatedRequest, r
 });
 
 /**
+ * PUT /api/v1/slots/:id/time  (admin only)
+ * Adjusts a slot's shift start/end so the roster can reflect a crew's
+ * irregular real-world hours (e.g. 07:00–17:00, 08:30–18:30, 10:00–20:00)
+ * rather than the fixed day/night blocks produced at generation.
+ * Body: { start_time, end_time }  — "HH:MM" or "HH:MM:SS"
+ *
+ * An end_time <= start_time is accepted and treated as an overnight shift,
+ * mirroring the shift_slots CHECK constraint (only zero-length is invalid).
+ */
+router.put('/slots/:id/time', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const slotId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(slotId) || slotId <= 0) {
+      res.status(400).json({ error: 'A valid slot id is required' });
+      return;
+    }
+
+    // Accept HH:MM or HH:MM:SS and normalise to HH:MM:SS for the TIME columns.
+    const timePattern = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+    const normalise = (t: unknown): string | null => {
+      if (typeof t !== 'string' || !timePattern.test(t)) return null;
+      return t.length === 5 ? `${t}:00` : t;
+    };
+
+    const start_time = normalise(req.body.start_time);
+    const end_time = normalise(req.body.end_time);
+
+    if (!start_time || !end_time) {
+      res.status(400).json({ error: 'start_time and end_time are required in HH:MM (24h) format' });
+      return;
+    }
+
+    if (start_time === end_time) {
+      res.status(400).json({ error: 'start_time and end_time cannot be identical (zero-length shift)' });
+      return;
+    }
+
+    // Load the slot with its roster so we can block locked rosters.
+    const result = await fetchSlotWithDate(slotId);
+    if (!result) {
+      res.status(404).json({ error: 'Slot not found' });
+      return;
+    }
+
+    const rosterStatus = (result.slot as unknown as { rosters: { status: string } }).rosters?.status;
+    if (rosterStatus === 'locked') {
+      res.status(403).json({ error: 'Cannot modify shift times in a locked roster' });
+      return;
+    }
+
+    const { data: updated, error: updateErr } = await supabaseAdmin
+      .from('shift_slots')
+      .update({ start_time, end_time })
+      .eq('slot_id', slotId)
+      .select('slot_id, roster_id, ambulance_id, start_time, end_time, service_type, crew_position')
+      .single();
+
+    if (updateErr || !updated) throw updateErr ?? new Error('Failed to update shift times');
+
+    await logAudit({
+      entity_type: 'shift_slots',
+      entity_id: slotId,
+      action: 'update',
+      actor_id: req.user!.id,
+      details: {
+        change: 'shift_time',
+        roster_date: result.rosterDate,
+        from: { start_time: result.slot.start_time, end_time: result.slot.end_time },
+        to: { start_time, end_time },
+      },
+    });
+
+    res.json({ data: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * POST /api/v1/:id/reassign
  * (router is mounted at bare /api/v1 — there is no /roster segment;
  * the frontend calls /api/v1/${roster_id}/reassign)

@@ -129,6 +129,15 @@ export const RosterView: React.FC = () => {
     });
   };
 
+  const handleSlotTimeChange = useCallback(
+    async (slotId: string, startTime: string, endTime: string) => {
+      await rosterApi.updateSlotTime(slotId, startTime, endTime);
+      toastSuccess('Shift time updated', `Slot now runs ${startTime}–${endTime}`);
+      await loadRoster(selectedDate);
+    },
+    [selectedDate, loadRoster, toastSuccess]
+  );
+
   const handlePrevDay = () => setSelectedDate(format(subDays(parseISO(selectedDate), 1), 'yyyy-MM-dd'));
   const handleNextDay = () => setSelectedDate(format(addDays(parseISO(selectedDate), 1), 'yyyy-MM-dd'));
   const handleToday = () => setSelectedDate(today);
@@ -350,7 +359,9 @@ export const RosterView: React.FC = () => {
           date={selectedDate}
           isReadOnly={isReadOnly}
           isWeekendOrHoliday={isWeekendOrHoliday}
+          isAdmin={isAdmin}
           onStaffClick={setSelectedStaff}
+          onSlotTimeChange={handleSlotTimeChange}
           exceptionsPanel={exceptionsPanel}
         />
       )}

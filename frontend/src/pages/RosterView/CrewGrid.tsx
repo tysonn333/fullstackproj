@@ -6,7 +6,9 @@ interface CrewGridProps {
   date: string;
   isReadOnly: boolean;
   isWeekendOrHoliday: boolean;
+  isAdmin?: boolean;
   onStaffClick: (staff: Staff) => void;
+  onSlotTimeChange?: (slotId: string, startTime: string, endTime: string) => Promise<void>;
   exceptionsPanel?: React.ReactNode;
 }
 
@@ -43,10 +45,57 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
   date,
   isReadOnly,
   isWeekendOrHoliday,
+  isAdmin = false,
   onStaffClick,
+  onSlotTimeChange,
   exceptionsPanel,
 }) => {
   const [expandedSlot, setExpandedSlot] = useState<string | null>(null);
+
+  // Inline shift-time editing — lets an admin align each slot to a crew's
+  // irregular real-world hours instead of the fixed generated day/night block.
+  const [editingSlot, setEditingSlot] = useState<string | null>(null);
+  const [editStart, setEditStart] = useState('');
+  const [editEnd, setEditEnd] = useState('');
+  const [savingTime, setSavingTime] = useState(false);
+  const [timeError, setTimeError] = useState<string | null>(null);
+
+  const canEditTimes = isAdmin && !isReadOnly && !!onSlotTimeChange;
+
+  const beginEdit = (slotId: string, start?: string, end?: string) => {
+    setEditingSlot(slotId);
+    setEditStart((start ?? '').slice(0, 5));
+    setEditEnd((end ?? '').slice(0, 5));
+    setTimeError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingSlot(null);
+    setTimeError(null);
+    setSavingTime(false);
+  };
+
+  const saveEdit = async (slotId: string) => {
+    if (!onSlotTimeChange) return;
+    if (!editStart || !editEnd) {
+      setTimeError('Both start and end times are required');
+      return;
+    }
+    if (editStart === editEnd) {
+      setTimeError('Start and end cannot be the same time');
+      return;
+    }
+    setSavingTime(true);
+    setTimeError(null);
+    try {
+      await onSlotTimeChange(slotId, editStart, editEnd);
+      setEditingSlot(null);
+    } catch (err) {
+      setTimeError(err instanceof Error ? err.message : 'Failed to update shift time');
+    } finally {
+      setSavingTime(false);
+    }
+  };
 
   // Show everything the roster actually contains — hiding slots client-side
   // would contradict the stats bar and mask unfilled shifts. Any weekend/PH
@@ -125,15 +174,75 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                       {slot.job_type}
                     </span>
 
-                    {/* Shift time */}
-                    <div className="flex-shrink-0 text-sm text-gray-700">
-                      <span className="font-medium">{slot.shift_start?.slice(0, 5)}</span>
-                      <span className="text-gray-400 mx-1">—</span>
-                      <span className="font-medium">{slot.shift_end?.slice(0, 5)}</span>
-                      {hours && (
-                        <span className="text-xs text-gray-400 ml-1">({hours}h)</span>
-                      )}
-                    </div>
+                    {/* Shift time — editable inline for admins on active rosters */}
+                    {editingSlot === slot.id ? (
+                      <div
+                        className="flex-shrink-0 flex items-center gap-1.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="time"
+                          value={editStart}
+                          onChange={(e) => setEditStart(e.target.value)}
+                          className="input text-xs py-1 px-1.5 w-[92px]"
+                          disabled={savingTime}
+                          aria-label="Shift start time"
+                        />
+                        <span className="text-gray-400">—</span>
+                        <input
+                          type="time"
+                          value={editEnd}
+                          onChange={(e) => setEditEnd(e.target.value)}
+                          className="input text-xs py-1 px-1.5 w-[92px]"
+                          disabled={savingTime}
+                          aria-label="Shift end time"
+                        />
+                        <button
+                          onClick={() => saveEdit(slot.id)}
+                          disabled={savingTime}
+                          className="btn-primary btn-sm px-2 py-1"
+                          title="Save shift time"
+                        >
+                          {savingTime ? '…' : 'Save'}
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          disabled={savingTime}
+                          className="btn-secondary btn-sm px-2 py-1"
+                          title="Cancel"
+                        >
+                          Cancel
+                        </button>
+                        {timeError && (
+                          <span className="text-xs text-red-600 ml-1">{timeError}</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex-shrink-0 flex items-center gap-1 text-sm text-gray-700 group/time">
+                        <span className="font-medium">{slot.shift_start?.slice(0, 5)}</span>
+                        <span className="text-gray-400 mx-0.5">—</span>
+                        <span className="font-medium">{slot.shift_end?.slice(0, 5)}</span>
+                        {hours && (
+                          <span className="text-xs text-gray-400 ml-1">({hours}h)</span>
+                        )}
+                        {canEditTimes && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              beginEdit(slot.id, slot.shift_start, slot.shift_end);
+                            }}
+                            className="ml-1 p-0.5 text-gray-300 hover:text-blue-500 transition-colors opacity-0 group-hover/time:opacity-100 focus:opacity-100"
+                            title="Edit shift time"
+                            aria-label="Edit shift time"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     {/* Required role */}
                     <span className={`badge capitalize text-xs ${roleBadge[slot.required_role] || 'badge-gray'}`}>
