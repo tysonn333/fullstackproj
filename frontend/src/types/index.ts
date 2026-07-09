@@ -100,6 +100,11 @@ export interface Assignment {
   staff_id: string;
   staff?: Staff;
   status: AssignmentStatus;
+  // Optional per-staff timing override. When set, this crew member works these
+  // hours instead of the slot's shared band; when undefined they inherit the
+  // slot's shift_start / shift_end.
+  shift_start?: string;
+  shift_end?: string;
   swap_reason?: string;
   confirmed_at?: string;
   created_at: string;

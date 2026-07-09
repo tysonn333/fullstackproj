@@ -18,6 +18,8 @@ interface AssignmentRow {
   score: number | null;
   status: string;
   assigned_at: string;
+  start_time?: string | null;
+  end_time?: string | null;
   staff?: {
     full_name?: string;
     role?: Staff['role'];
@@ -122,6 +124,8 @@ function mapAssignment(a: AssignmentRow, slotId: number): Assignment {
     staff_id: String(a.staff_id),
     staff: mapNestedStaff(a),
     status: mapAssignmentStatus(a.status),
+    shift_start: a.start_time ?? undefined,
+    shift_end: a.end_time ?? undefined,
     created_at: a.assigned_at,
     updated_at: a.assigned_at,
   };

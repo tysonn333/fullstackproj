@@ -225,8 +225,10 @@ router.post('/slots/:id/assign', requireAdmin, async (req: AuthenticatedRequest,
 router.put('/assignments/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const assignmentId = parseInt(req.params.id, 10);
-    const { status } = req.body;
+    const { status, start_time, end_time } = req.body;
     const staff_id = req.body.staff_id != null ? Number(req.body.staff_id) : undefined;
+    // Distinguish "field absent" from "field sent as null" (an explicit clear).
+    const timingProvided = 'start_time' in req.body || 'end_time' in req.body;
 
     const { data: existing, error: fetchErr } = await supabaseAdmin
       .from('assignments')
@@ -254,6 +256,38 @@ router.put('/assignments/:id', requireAdmin, async (req: AuthenticatedRequest, r
         return;
       }
       update.status = status;
+    }
+
+    // Optional per-staff timing override. Send both start_time and end_time to
+    // set an individual's irregular band, or both as null to clear it and fall
+    // back to the slot's shared band.
+    if (timingProvided) {
+      const bothNull = start_time == null && end_time == null;
+      const bothSet = start_time != null && end_time != null;
+
+      if (!bothNull && !bothSet) {
+        res.status(400).json({ error: 'start_time and end_time must be provided together (or both null to clear)' });
+        return;
+      }
+
+      if (bothSet) {
+        const timeRe = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+        if (typeof start_time !== 'string' || !timeRe.test(start_time) ||
+            typeof end_time !== 'string' || !timeRe.test(end_time)) {
+          res.status(400).json({ error: 'start_time and end_time must be HH:MM or HH:MM:SS' });
+          return;
+        }
+        if (start_time === end_time) {
+          res.status(400).json({ error: 'start_time and end_time cannot be equal (zero-length shift)' });
+          return;
+        }
+        update.start_time = start_time;
+        update.end_time = end_time;
+      } else {
+        // Explicit clear
+        update.start_time = null;
+        update.end_time = null;
+      }
     }
 
     if (staff_id && staff_id !== existing.staff_id) {

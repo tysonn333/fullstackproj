@@ -139,8 +139,19 @@ CREATE TABLE assignments (
     score         NUMERIC(5, 2),
     status        VARCHAR(15) NOT NULL DEFAULT 'assigned'
                   CHECK (status IN ('assigned', 'confirmed', 'swapped', 'cancelled')),
+    -- Optional per-staff timing override. NULL means this crew member works the
+    -- slot's shared band (start_time/end_time on shift_slots); when set, it
+    -- records their own irregular hours. As with shift_slots, end_time <=
+    -- start_time means the override crosses midnight; only equal times (a
+    -- zero-length shift) are invalid.
+    start_time    TIME,
+    end_time      TIME,
     assigned_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (slot_id)
+    UNIQUE (slot_id),
+    CONSTRAINT assignments_timing_check CHECK (
+        (start_time IS NULL AND end_time IS NULL)
+        OR (start_time IS NOT NULL AND end_time IS NOT NULL AND start_time <> end_time)
+    )
 );
 
 -- flags

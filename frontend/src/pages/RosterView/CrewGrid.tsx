@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { ShiftSlot, Staff } from '../../types';
+import type { Assignment, ShiftSlot, Staff } from '../../types';
 
 interface CrewGridProps {
   slots: ShiftSlot[];
@@ -61,6 +61,20 @@ const periodAccent: Record<ShiftPeriod, string> = {
   Overnight: 'bg-indigo-100 text-indigo-700 border border-indigo-200',
   Unscheduled: 'bg-gray-100 text-gray-600 border border-gray-200',
 };
+
+// The hours a crew member actually works: their own override when set,
+// otherwise the slot's shared band. `override` flags an individual irregular
+// timing that differs from the rest of the crew.
+function effectiveTiming(a: Assignment, slot: ShiftSlot): {
+  start?: string;
+  end?: string;
+  override: boolean;
+} {
+  if (a.shift_start && a.shift_end) {
+    return { start: a.shift_start, end: a.shift_end, override: true };
+  }
+  return { start: slot.shift_start, end: slot.shift_end, override: false };
+}
 
 function shiftPeriod(start?: string, end?: string): ShiftPeriod {
   if (!start || !end) return 'Unscheduled';
@@ -262,7 +276,9 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                           Unfilled
                         </span>
                       ) : (
-                        assignments.map((a) => (
+                        assignments.map((a) => {
+                          const timing = effectiveTiming(a, slot);
+                          return (
                           <button
                             key={a.id}
                             onClick={(e) => {
@@ -275,12 +291,22 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                               {a.staff?.name?.charAt(0) || '?'}
                             </span>
                             <span className="font-medium text-gray-800">{a.staff?.name || 'Unknown'}</span>
+                            {/* Individual irregular timing that differs from the crew's band */}
+                            {timing.override && timing.start && timing.end && (
+                              <span
+                                className="px-1 rounded bg-rose-50 text-rose-600 border border-rose-200 text-[10px] font-medium"
+                                title="Individual shift timing (differs from the crew band)"
+                              >
+                                {timing.start.slice(0, 5)}–{timing.end.slice(0, 5)}
+                              </span>
+                            )}
                             {(a.staff as Staff & { consecutive_days?: number })?.consecutive_days !== undefined &&
                               ((a.staff as Staff & { consecutive_days?: number })?.consecutive_days ?? 0) >= 7 && (
                               <span className="text-red-500" title="7th consecutive day!">⚠️</span>
                             )}
                           </button>
-                        ))
+                          );
+                        })
                       )}
                     </div>
 
@@ -350,7 +376,12 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                       {assignments.length > 0 && (
                         <div className="mt-3 space-y-2">
                           <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Staff Details</p>
-                          {assignments.map((a) => (
+                          {assignments.map((a) => {
+                            const timing = effectiveTiming(a, slot);
+                            const timingHours = timing.start && timing.end
+                              ? calcHours(timing.start, timing.end)
+                              : null;
+                            return (
                             <div
                               key={a.id}
                               className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-100"
@@ -370,7 +401,20 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                                 </div>
                               </div>
                               <div className="text-right">
-                                <span className={`badge capitalize text-xs ${
+                                {timing.start && timing.end && (
+                                  <p className="text-xs text-gray-700 font-medium">
+                                    {timing.start.slice(0, 5)}–{timing.end.slice(0, 5)}
+                                    {timingHours != null && (
+                                      <span className="text-gray-400"> · {timingHours}h</span>
+                                    )}
+                                    {timing.override && (
+                                      <span className="ml-1 text-rose-600" title="Individual timing (differs from crew band)">
+                                        (own timing)
+                                      </span>
+                                    )}
+                                  </p>
+                                )}
+                                <span className={`badge capitalize text-xs mt-0.5 ${
                                   a.status === 'confirmed' ? 'badge-green' :
                                   a.status === 'dropped' ? 'badge-red' :
                                   a.status === 'swapped' ? 'badge-yellow' : 'badge-blue'
@@ -382,7 +426,8 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                                 )}
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
