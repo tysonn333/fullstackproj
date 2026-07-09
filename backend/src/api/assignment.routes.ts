@@ -365,9 +365,10 @@ router.put('/slots/:id/time', requireAdmin, async (req: AuthenticatedRequest, re
     await logAudit({
       entity_type: 'shift_slots',
       entity_id: slotId,
-      action: 'update_shift_time',
+      action: 'update',
       actor_id: req.user!.id,
       details: {
+        change: 'shift_time',
         roster_date: result.rosterDate,
         from: { start_time: result.slot.start_time, end_time: result.slot.end_time },
         to: { start_time, end_time },
