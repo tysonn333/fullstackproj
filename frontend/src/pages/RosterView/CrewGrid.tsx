@@ -30,6 +30,8 @@ const roleBadge: Record<string, string> = {
   paramedic: 'bg-orange-100 text-orange-700',
 };
 
+const MINUTES_PER_DAY = 24 * 60;
+
 function toMinutes(t: string): number {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
@@ -37,7 +39,7 @@ function toMinutes(t: string): number {
 
 function calcHours(start: string, end: string): number {
   let diff = toMinutes(end) - toMinutes(start);
-  if (diff < 0) diff += 24 * 60;
+  if (diff < 0) diff += MINUTES_PER_DAY;
   return parseFloat((diff / 60).toFixed(1));
 }
 
@@ -45,6 +47,75 @@ function calcHours(start: string, end: string): number {
 function isOvernight(start: string, end: string): boolean {
   return toMinutes(end) <= toMinutes(start);
 }
+
+// With irregular timings there is no fixed "day"/"night" split, so classify each
+// slot by where its band actually starts. Overnight bands are their own group.
+type ShiftPeriod = 'Morning' | 'Afternoon' | 'Evening' | 'Overnight' | 'Unscheduled';
+
+const PERIOD_ORDER: ShiftPeriod[] = ['Morning', 'Afternoon', 'Evening', 'Overnight', 'Unscheduled'];
+
+const periodAccent: Record<ShiftPeriod, string> = {
+  Morning: 'bg-amber-100 text-amber-700 border border-amber-200',
+  Afternoon: 'bg-sky-100 text-sky-700 border border-sky-200',
+  Evening: 'bg-violet-100 text-violet-700 border border-violet-200',
+  Overnight: 'bg-indigo-100 text-indigo-700 border border-indigo-200',
+  Unscheduled: 'bg-gray-100 text-gray-600 border border-gray-200',
+};
+
+function shiftPeriod(start?: string, end?: string): ShiftPeriod {
+  if (!start || !end) return 'Unscheduled';
+  if (isOvernight(start, end)) return 'Overnight';
+  const hour = Math.floor(toMinutes(start) / 60);
+  if (hour < 12) return 'Morning';
+  if (hour < 17) return 'Afternoon';
+  return 'Evening';
+}
+
+// Segments of a shift laid out on a 0–24h axis (as percentages). Overnight
+// bands wrap into two segments so the bar reads correctly across midnight.
+function timelineSegments(start: string, end: string): Array<{ left: number; width: number }> {
+  const s = toMinutes(start);
+  const e = toMinutes(end);
+  const pct = (min: number) => (min / MINUTES_PER_DAY) * 100;
+  if (isOvernight(start, end)) {
+    return [
+      { left: pct(s), width: pct(MINUTES_PER_DAY - s) },
+      { left: 0, width: pct(e) },
+    ];
+  }
+  return [{ left: pct(s), width: pct(e - s) }];
+}
+
+/**
+ * A slim 24-hour timeline that shows where an irregular shift band sits across
+ * the day, wrapping across midnight for overnight shifts.
+ */
+const ShiftTimeline: React.FC<{ start: string; end: string; overnight: boolean }> = ({
+  start,
+  end,
+  overnight,
+}) => (
+  <div>
+    <div className="relative h-2 w-full rounded-full bg-gray-100 overflow-hidden">
+      {/* Midday reference tick */}
+      <div className="absolute top-0 bottom-0 left-1/2 w-px bg-gray-200" />
+      {timelineSegments(start, end).map((seg, i) => (
+        <div
+          key={i}
+          className={`absolute top-0 h-full rounded-full ${overnight ? 'bg-indigo-400' : 'bg-blue-400'}`}
+          style={{ left: `${seg.left}%`, width: `${seg.width}%` }}
+        />
+      ))}
+    </div>
+    <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-0.5">
+      <span>00</span>
+      <span>06</span>
+      <span>12</span>
+      <span>18</span>
+      <span>24</span>
+    </div>
+  </div>
+);
 
 export const CrewGrid: React.FC<CrewGridProps> = ({
   slots,
@@ -60,6 +131,17 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
   // would contradict the stats bar and mask unfilled shifts. Any weekend/PH
   // ambulance reduction happens at generation time on the backend.
   const displaySlots = slots;
+
+  // Irregular timings no longer fall into two neat day/night buckets, so group
+  // the roster by the period each shift starts in and order each group by
+  // start time. This keeps the grid readable when every ambulance runs its own
+  // band. Slots missing a time fall into an "Unscheduled" group at the end.
+  const groupedSlots = PERIOD_ORDER.map((period) => ({
+    period,
+    slots: displaySlots
+      .filter((s) => shiftPeriod(s.shift_start, s.shift_end) === period)
+      .sort((a, b) => toMinutes(a.shift_start || '00:00') - toMinutes(b.shift_start || '00:00')),
+  })).filter((g) => g.slots.length > 0);
 
   return (
     <div className="flex gap-4">
@@ -96,8 +178,21 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
             <p className="text-sm font-medium">No roster found for {date}</p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {displaySlots.map((slot) => {
+          <div className="space-y-5">
+            {groupedSlots.map(({ period, slots: groupSlots }) => (
+              <div key={period}>
+                {/* Period divider — groups the irregular bands by start time */}
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <span className={`badge text-xs font-semibold ${periodAccent[period]}`}>
+                    {period}
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    {groupSlots.length} shift{groupSlots.length !== 1 ? 's' : ''}
+                  </span>
+                  <div className="flex-1 h-px bg-gray-100" />
+                </div>
+                <div className="space-y-2">
+                  {groupSlots.map((slot) => {
               const isExpanded = expandedSlot === slot.id;
               const hours = slot.shift_start && slot.shift_end
                 ? calcHours(slot.shift_start, slot.shift_end)
@@ -240,6 +335,18 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                         </div>
                       </div>
 
+                      {/* 24h timeline showing where this irregular band sits */}
+                      {slot.shift_start && slot.shift_end && (
+                        <div className="mt-3">
+                          <p className="text-xs text-gray-500 mb-1.5">Coverage</p>
+                          <ShiftTimeline
+                            start={slot.shift_start}
+                            end={slot.shift_end}
+                            overnight={overnight}
+                          />
+                        </div>
+                      )}
+
                       {assignments.length > 0 && (
                         <div className="mt-3 space-y-2">
                           <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Staff Details</p>
@@ -282,7 +389,10 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                   )}
                 </div>
               );
-            })}
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
