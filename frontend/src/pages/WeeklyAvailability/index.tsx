@@ -311,7 +311,7 @@ export const WeeklyAvailability: React.FC = () => {
                   }}
                   rows={2}
                   className={`input resize-none ${errors.reason ? 'input-error' : ''}`}
-                  placeholder="Briefly describe the reason for the leave day(s)..."
+                  placeholder="e.g. Monday preplanned event, Tuesday going doctor..."
                 />
                 {errors.reason && <p className="text-xs text-red-600 mt-1">{errors.reason}</p>}
               </div>

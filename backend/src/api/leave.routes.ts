@@ -54,7 +54,14 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
       return;
     }
 
-    const leave = await createLeaveRequest({ staff_id, start_date, end_date, leave_type, reason });
+    const leave = await createLeaveRequest({
+      staff_id,
+      start_date,
+      end_date,
+      leave_type,
+      reason,
+      actor_id: req.user!.id,
+    });
     res.status(201).json({ data: leave });
   } catch (err: unknown) {
     if (err instanceof Error && (err.message.includes('not found') || err.message.includes('Conflicting'))) {
@@ -81,7 +88,7 @@ router.put('/:id/approve', requireAdmin, async (req: AuthenticatedRequest, res: 
       conflicting_assignment_ids: conflicts,
       message:
         conflicts.length > 0
-          ? `Leave approved. Warning: ${conflicts.length} existing assignment(s) conflict with this leave.`
+          ? `Leave approved. ${conflicts.length} clashing assignment(s) were dropped and flagged as coverage gaps for last-minute re-filling.`
           : 'Leave approved successfully.',
     });
   } catch (err: unknown) {

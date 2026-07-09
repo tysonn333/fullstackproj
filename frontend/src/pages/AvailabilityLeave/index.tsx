@@ -158,6 +158,25 @@ export const AvailabilityLeave: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-900">Availability & Leave</h1>
           <p className="text-gray-500 text-sm mt-0.5">UC-003 — Leave requests and availability management</p>
         </div>
+      </div>
+
+      {/* Tabs + weekly availability action (same level) */}
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                tab === t.id
+                  ? 'bg-white text-blue-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           onClick={() => navigate('/availability/weekly')}
@@ -168,23 +187,6 @@ export const AvailabilityLeave: React.FC = () => {
           </svg>
           Submit Weekly Availability
         </button>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-5 w-fit">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              tab === t.id
-                ? 'bg-white text-blue-700 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
       </div>
 
       {/* Calendar Tab */}
