@@ -252,6 +252,18 @@ export const rosterApi = {
     return mapRoster(data.data);
   },
 
+  /**
+   * Adjusts a slot's shift start/end times so the roster can be aligned to a
+   * crew's irregular real-world hours. Times are "HH:MM" (24h); an end at or
+   * before the start is treated as an overnight shift by the backend.
+   */
+  updateSlotTime: async (slotId: string, startTime: string, endTime: string): Promise<void> => {
+    await apiClient.put(`/api/v1/slots/${slotId}/time`, {
+      start_time: startTime,
+      end_time: endTime,
+    });
+  },
+
   getReplacementCandidates: async (slotId: string): Promise<ReplacementCandidate[]> => {
     const { data } = await apiClient.get<{ ranked_candidates: RankedCandidateRow[] }>(
       `/api/v1/slots/${slotId}/ranked`
