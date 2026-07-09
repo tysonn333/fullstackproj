@@ -72,21 +72,24 @@ const XIcon = () => (
 // ─── Nav Items ────────────────────────────────────────────────────────────────
 
 const navItems = [
-  { to: '/roster', label: 'Roster View', icon: <CalendarIcon /> },
-  { to: '/staff', label: 'Staff Management', icon: <UsersIcon /> },
-  { to: '/availability', label: 'Availability & Leave', icon: <ClockIcon /> },
-  { to: '/exceptions', label: 'Exceptions', icon: <ExclamationIcon /> },
-  { to: '/last-minute', label: 'Last-Minute Changes', icon: <SwapIcon /> },
+  { to: '/roster', label: 'Roster View', icon: <CalendarIcon />, adminOnly: false },
+  { to: '/staff', label: 'Staff Management', icon: <UsersIcon />, adminOnly: true },
+  { to: '/availability', label: 'Availability & Leave', icon: <ClockIcon />, adminOnly: false },
+  { to: '/exceptions', label: 'Exceptions', icon: <ExclamationIcon />, adminOnly: true },
+  { to: '/last-minute', label: 'Last-Minute Changes', icon: <SwapIcon />, adminOnly: true },
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export const Navbar: React.FC = () => {
-  const { user, signOut } = useAuth();
+  const { user, signOut, isAdmin } = useAuth();
   const { count } = useFlags();
   const { error: toastError, success } = useToast();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Employees only see the pages they can actually use.
+  const visibleNavItems = navItems.filter((item) => isAdmin || !item.adminOnly);
 
   const handleSignOut = async () => {
     try {
@@ -115,7 +118,7 @@ export const Navbar: React.FC = () => {
 
           {/* Desktop Nav */}
           <div className="hidden lg:flex items-center gap-1">
-            {navItems.map((item) => (
+            {visibleNavItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -159,6 +162,9 @@ export const Navbar: React.FC = () => {
                 {user?.email?.charAt(0).toUpperCase() || 'A'}
               </div>
               <span className="text-gray-600 max-w-[140px] truncate">{user?.email}</span>
+              <span className={`badge text-xs ${isAdmin ? 'badge-blue' : 'badge-gray'}`}>
+                {isAdmin ? 'Admin' : 'Employee'}
+              </span>
             </div>
 
             {/* Sign out */}
@@ -185,7 +191,7 @@ export const Navbar: React.FC = () => {
       {/* Mobile Menu */}
       {mobileOpen && (
         <div className="lg:hidden border-t border-gray-100 bg-white px-4 py-3 space-y-1">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

@@ -6,6 +6,7 @@ export interface AuthenticatedRequest extends Request {
     id: string;
     email?: string;
     role?: string;
+    staffId?: number | null;
   };
   accessToken?: string;
 }
@@ -32,17 +33,20 @@ export async function authenticate(
       return;
     }
 
-    // Fetch profile to get role
+    // Fetch profile to get role + linked staff record.
+    // Default to the least-privileged role ('employee') when no profile row
+    // exists, so a missing/misconfigured profile can never grant admin rights.
     const { data: profile } = await supabaseAdmin
       .from('profiles')
-      .select('role')
+      .select('role, staff_id')
       .eq('id', data.user.id)
       .single();
 
     req.user = {
       id: data.user.id,
       email: data.user.email,
-      role: profile?.role ?? 'ops_director',
+      role: profile?.role ?? 'employee',
+      staffId: profile?.staff_id ?? null,
     };
     req.accessToken = token;
 
@@ -64,4 +68,27 @@ export function requireRole(...roles: string[]) {
     }
     next();
   };
+}
+
+/**
+ * Gate a route to admins only. Use after `authenticate`.
+ */
+export const requireAdmin = requireRole('admin');
+
+/**
+ * Allow the action only if the caller is an admin or is operating on their own
+ * linked staff record. Returns true when allowed; otherwise sends 403 and
+ * returns false so the caller can `return` early.
+ */
+export function ensureSelfOrAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  staffId: number
+): boolean {
+  if (req.user?.role === 'admin') return true;
+  if (req.user?.staffId != null && req.user.staffId === staffId) return true;
+  res.status(403).json({
+    error: 'You can only manage your own records. Ask an admin if you need broader access.',
+  });
+  return false;
 }

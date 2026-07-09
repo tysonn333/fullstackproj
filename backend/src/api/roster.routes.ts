@@ -1,6 +1,6 @@
 import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { authenticate, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { generateRoster } from '../services/scheduling/generator';
 import { logAudit } from '../services/audit.service';
 import { notifyRosterPublished } from '../services/notification.service';
@@ -34,10 +34,10 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
 });
 
 /**
- * POST /api/v1/roster/generate
+ * POST /api/v1/roster/generate  (admin only)
  * Body: { date: "YYYY-MM-DD", force?: boolean }
  */
-router.post('/generate', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.post('/generate', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const { date, force } = req.body;
 
@@ -107,10 +107,10 @@ router.get('/:id/slots', async (req: AuthenticatedRequest, res: Response, next: 
 });
 
 /**
- * PUT /api/v1/roster/:id/publish
+ * PUT /api/v1/roster/:id/publish  (admin only)
  * Transitions roster from draft → published.
  */
-router.put('/:id/publish', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.put('/:id/publish', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const rosterId = parseInt(req.params.id, 10);
 

@@ -1,6 +1,6 @@
 import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { authenticate, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { getEligibleCandidates, ShiftSlot } from '../services/scheduling/filter';
 import { rankCandidates } from '../services/scheduling/ranking';
 import { logAudit } from '../services/audit.service';
@@ -83,11 +83,11 @@ router.get('/slots/:id/ranked', async (req: AuthenticatedRequest, res: Response,
 });
 
 /**
- * POST /api/v1/slots/:id/assign
+ * POST /api/v1/slots/:id/assign  (admin only)
  * Assigns a specific staff member to a slot.
  * Body: { staff_id }
  */
-router.post('/slots/:id/assign', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.post('/slots/:id/assign', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const slotId = parseInt(req.params.id, 10);
     const staff_id = Number(req.body.staff_id);
@@ -218,11 +218,11 @@ router.post('/slots/:id/assign', async (req: AuthenticatedRequest, res: Response
 });
 
 /**
- * PUT /api/v1/assignments/:id
+ * PUT /api/v1/assignments/:id  (admin only)
  * Updates assignment status or swaps staff member.
  * Body: { status?, staff_id? }
  */
-router.put('/assignments/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.put('/assignments/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const assignmentId = parseInt(req.params.id, 10);
     const { status } = req.body;
@@ -309,7 +309,7 @@ router.put('/assignments/:id', async (req: AuthenticatedRequest, res: Response, 
  * Last-minute change: reassign a slot within a published roster.
  * Body: { slot_id, new_staff_id, reason? }
  */
-router.post('/:id/reassign', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.post('/:id/reassign', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const rosterId = parseInt(req.params.id, 10);
     const { reason } = req.body;

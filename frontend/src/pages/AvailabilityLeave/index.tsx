@@ -9,6 +9,7 @@ import { LeaveRequestForm } from './LeaveRequestForm';
 import { AdminApprovalPanel } from './AdminApprovalPanel';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
+import { useAuth } from '../../hooks/useAuth';
 import type { Staff, LeaveRequest, Availability } from '../../types';
 
 type TabType = 'calendar' | 'request' | 'admin';
@@ -37,17 +38,27 @@ export const AvailabilityLeave: React.FC = () => {
   const [loadingLeave, setLoadingLeave] = useState(false);
 
   const { error: toastError } = useToast();
+  const { isAdmin, staffId: myStaffId } = useAuth();
 
-  // Load staff
+  // Load staff. Employees can only act on their own record, so lock the
+  // selection to themselves; admins get the full list and pick anyone.
   useEffect(() => {
     staffApi.list({ status: 'active' })
       .then((r) => {
-        setStaffList(r.data);
-        if (r.data.length > 0) setSelectedStaffId(r.data[0].id);
+        if (isAdmin) {
+          setStaffList(r.data);
+          if (r.data.length > 0) setSelectedStaffId(r.data[0].id);
+        } else {
+          const mine = myStaffId != null
+            ? r.data.filter((s) => s.id === String(myStaffId))
+            : [];
+          setStaffList(mine);
+          if (mine.length > 0) setSelectedStaffId(mine[0].id);
+        }
       })
       .catch(() => toastError('Failed to load staff list'))
       .finally(() => setLoadingStaff(false));
-  }, [toastError]);
+  }, [toastError, isAdmin, myStaffId]);
 
   // Load calendar data when staff / month changes
   const loadCalendar = useCallback(async () => {
@@ -133,7 +144,8 @@ export const AvailabilityLeave: React.FC = () => {
   const tabs: { id: TabType; label: string }[] = [
     { id: 'calendar', label: 'Availability Calendar' },
     { id: 'request', label: 'Submit Leave Request' },
-    { id: 'admin', label: 'Admin Approvals' },
+    // Approving leave is an admin action.
+    ...(isAdmin ? [{ id: 'admin' as TabType, label: 'Admin Approvals' }] : []),
   ];
 
   return (

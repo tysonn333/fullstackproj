@@ -7,6 +7,7 @@ import { StaffDetail } from './StaffDetail';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { useAuth } from '../../hooks/useAuth';
 import type { ShiftSlot, Staff, Flag, Roster } from '../../types';
 
 // Singapore public holidays (simplified static list, incl. observed days —
@@ -39,6 +40,7 @@ export const RosterView: React.FC = () => {
 
   const { error: toastError, success: toastSuccess } = useToast();
   const { confirm } = useConfirm();
+  const { isAdmin } = useAuth();
 
   const today = format(new Date(), 'yyyy-MM-dd');
   const isReadOnly = selectedDate < today;
@@ -224,7 +226,7 @@ export const RosterView: React.FC = () => {
             </svg>
             Refresh
           </button>
-          {!isReadOnly && (
+          {!isReadOnly && isAdmin && (
             <button
               onClick={handleGenerate}
               className="btn-primary btn-sm"
@@ -237,7 +239,7 @@ export const RosterView: React.FC = () => {
               {generating ? 'Generating…' : roster ? 'Regenerate' : 'Generate Roster'}
             </button>
           )}
-          {roster && !roster.published && !isReadOnly && (
+          {roster && !roster.published && !isReadOnly && isAdmin && (
             <button
               onClick={handlePublish}
               className="btn-primary btn-sm"

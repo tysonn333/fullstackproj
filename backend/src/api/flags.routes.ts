@@ -1,6 +1,6 @@
 import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { authenticate, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { logAudit } from '../services/audit.service';
 
 const router = Router();
@@ -42,7 +42,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
  * PUT /api/v1/flags/:id/resolve
  * Body: { resolution_note? }
  */
-router.put('/:id/resolve', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.put('/:id/resolve', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const flagId = parseInt(req.params.id, 10);
     const { resolution_note } = req.body;
@@ -96,7 +96,7 @@ router.put('/:id/resolve', async (req: AuthenticatedRequest, res: Response, next
  * PUT /api/v1/flags/:id/dismiss
  * Body: { reason? }
  */
-router.put('/:id/dismiss', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.put('/:id/dismiss', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const flagId = parseInt(req.params.id, 10);
     const { reason } = req.body;
@@ -149,7 +149,7 @@ router.put('/:id/dismiss', async (req: AuthenticatedRequest, res: Response, next
  * POST /api/v1/flags/bulk-action
  * Body: { flag_ids: number[], action: 'resolve' | 'dismiss', reason? }
  */
-router.post('/bulk-action', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.post('/bulk-action', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const { flag_ids, action, reason } = req.body;
 

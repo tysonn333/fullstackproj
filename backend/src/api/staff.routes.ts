@@ -1,6 +1,6 @@
 import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { authenticate, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { logAudit } from '../services/audit.service';
 
 const router = Router();
@@ -35,9 +35,9 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
 });
 
 /**
- * POST /api/v1/staff
+ * POST /api/v1/staff  (admin only)
  */
-router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.post('/', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const { full_name, phone, email, role, employment_type, home_postal } = req.body;
 
@@ -110,9 +110,9 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFu
 });
 
 /**
- * PUT /api/v1/staff/:id
+ * PUT /api/v1/staff/:id  (admin only)
  */
-router.put('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.put('/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const staffId = parseInt(req.params.id, 10);
     const { full_name, phone, email, role, employment_type, home_postal, status } = req.body;
@@ -153,10 +153,10 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFu
 });
 
 /**
- * DELETE /api/v1/staff/:id
+ * DELETE /api/v1/staff/:id  (admin only)
  * Soft delete — sets status to inactive
  */
-router.delete('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.delete('/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const staffId = parseInt(req.params.id, 10);
 
@@ -305,9 +305,9 @@ router.get('/:id/certifications', async (req: AuthenticatedRequest, res: Respons
 });
 
 /**
- * POST /api/v1/staff/:id/certifications
+ * POST /api/v1/staff/:id/certifications  (admin only)
  */
-router.post('/:id/certifications', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.post('/:id/certifications', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const staffId = parseInt(req.params.id, 10);
     const { cert_name, issued_date, expiry_date } = req.body;
@@ -346,9 +346,9 @@ router.post('/:id/certifications', async (req: AuthenticatedRequest, res: Respon
 });
 
 /**
- * DELETE /api/v1/staff/:id/certifications/:certId
+ * DELETE /api/v1/staff/:id/certifications/:certId  (admin only)
  */
-router.delete('/:id/certifications/:certId', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.delete('/:id/certifications/:certId', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const staffId = parseInt(req.params.id, 10);
     const certId = parseInt(req.params.certId, 10);
