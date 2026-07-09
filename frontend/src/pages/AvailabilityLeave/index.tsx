@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
   startOfWeek, endOfWeek, isSameMonth, isToday, parseISO
@@ -39,6 +40,7 @@ export const AvailabilityLeave: React.FC = () => {
 
   const { error: toastError } = useToast();
   const { isAdmin, staffId: myStaffId } = useAuth();
+  const navigate = useNavigate();
 
   // Load staff. Employees can only act on their own record, so lock the
   // selection to themselves; admins get the full list and pick anyone.
@@ -156,6 +158,16 @@ export const AvailabilityLeave: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-900">Availability & Leave</h1>
           <p className="text-gray-500 text-sm mt-0.5">UC-003 — Leave requests and availability management</p>
         </div>
+        <button
+          type="button"
+          onClick={() => navigate('/availability/weekly')}
+          className="btn-primary btn-sm"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Submit Weekly Availability
+        </button>
       </div>
 
       {/* Tabs */}
