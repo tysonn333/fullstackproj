@@ -1,22 +1,31 @@
 /**
- * Roster Generator
- *
- * UC-001 / UC-002: Auto-generates a draft roster for a given date.
+ * Roster Generator (UC-002 — orchestrates Guan Hee's UC-004 + UC-005)
  *
  * Strategy:
  *   1. Create (or reuse draft) a roster row for the date.
  *   2. Fetch all ambulances in service on that date.
- *   3. For each ambulance generate two shift slots (day 06:00–18:00, night 18:00–06:00)
- *      for each crew position (driver, attendant), respecting the ambulance service_type.
- *   4. For each slot, run the filter + ranking pipeline and auto-assign the top-ranked
- *      eligible candidate.
- *   5. Where no candidate is available, leave the slot unassigned and raise a coverage_gap flag.
- *   6. Raise consecutive_days flags for any assigned staff reaching >= 7 consecutive days.
+ *   3. For each ambulance generate two shift slots (day 06:00–18:00, night
+ *      18:00–06:00) for each crew position (driver, attendant), respecting the
+ *      ambulance service_type.
+ *   4. Group the driver + attendant slot of each ambulance/service/shift window
+ *      and CREW THEM AS A PAIR using UC-005's pairCrew():
+ *        • run UC-004 filter + UC-005 ranking to build a driver pool and an
+ *          attendant pool (role-appropriate for each position);
+ *        • pair the highest-scoring proximity-compatible driver + attendant;
+ *        • assign both, updating running hours/shift counters (via the DB) so
+ *          later slots reflect the new state.
+ *   5. Where a pool is empty, leave that slot unassigned and raise a
+ *      coverage_gap flag; where no proximity-compatible pair exists, assign the
+ *      best pair and raise a proximity flag.
+ *   6. Raise consecutive_days flags for any assigned staff reaching >= 7 days.
+ *
+ * Constrained (EAS) ambulances are crewed first so scarce driver/paramedic
+ * staff are not spent on MTS work that any role could cover.
  */
 
 import supabaseAdmin from '../../lib/supabase';
-import { getEligibleCandidates, ShiftSlot } from './filter';
-import { rankCandidates } from './ranking';
+import { getEligibleCandidates, ShiftSlot, FilterResult } from './filter';
+import { rankCandidates, pairCrew, RankedCandidate } from './ranking';
 import { logAudit } from '../audit.service';
 
 interface GenerateOptions {
@@ -31,6 +40,7 @@ interface GenerateResult {
   slots_created: number;
   assignments_made: number;
   flags_raised: number;
+  pairs_formed: number;
   errors: string[];
 }
 
@@ -38,6 +48,10 @@ const DAY_SHIFT_START = '06:00:00';
 const DAY_SHIFT_END = '18:00:00';
 const NIGHT_SHIFT_START = '18:00:00';
 const NIGHT_SHIFT_END = '06:00:00'; // next day — end_time <= start_time marks an overnight shift
+
+// Roles that can fill each crew position (UC spec: 1 driver + 1 medic/EMT/paramedic).
+const DRIVER_ROLES = new Set(['driver']);
+const ATTENDANT_ROLES = new Set(['medic', 'emt', 'paramedic']);
 
 async function upsertRoster(rosterDate: string, force: boolean): Promise<number> {
   // Check for existing roster
@@ -113,12 +127,48 @@ async function raiseFlag(
   });
 }
 
+/**
+ * Ranks the pool for one slot, then restricts it to the roles valid for that
+ * crew position. Returns the ranked, role-appropriate candidates.
+ */
+async function rankedPoolForPosition(
+  slot: ShiftSlot,
+  rosterDate: string,
+  allowedRoles: Set<string>
+): Promise<RankedCandidate[]> {
+  const filterResults: FilterResult[] = await getEligibleCandidates(slot, rosterDate);
+  const roleScoped = filterResults.filter((c) => allowedRoles.has(c.role));
+  return rankCandidates(roleScoped, slot, rosterDate);
+}
+
+async function assignStaffToSlot(
+  slotId: number,
+  candidate: RankedCandidate
+): Promise<string | null> {
+  const { error } = await supabaseAdmin.from('assignments').insert({
+    slot_id: slotId,
+    staff_id: candidate.staff_id,
+    score: candidate.score,
+    status: 'assigned',
+    assigned_at: new Date().toISOString(),
+  });
+  return error ? error.message : null;
+}
+
+interface SlotGroup {
+  key: string;
+  service_type: 'MTS' | 'EAS';
+  driverSlot?: ShiftSlot;
+  attendantSlot?: ShiftSlot;
+}
+
 export async function generateRoster(options: GenerateOptions): Promise<GenerateResult> {
   const { rosterDate, actorId, force = false } = options;
   const errors: string[] = [];
   let slotsCreated = 0;
   let assignmentsMade = 0;
   let flagsRaised = 0;
+  let pairsFormed = 0;
 
   // Step 1: Create / reset roster row
   const rosterId = await upsertRoster(rosterDate, force);
@@ -176,68 +226,120 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
 
   slotsCreated = insertedSlots.length;
 
-  // Step 4: Auto-assign for each slot.
-  // Fill the most constrained slots first: EAS shifts can only be crewed by
-  // drivers/paramedics, whereas MTS shifts accept every role. Assigning EAS
-  // first stops the greedy picker from spending scarce EAS-capable staff on
-  // MTS slots that anyone could have covered, which maximises overall coverage.
-  const serviceRank = (s: string): number => (s === 'EAS' ? 0 : 1);
-  const orderedSlots = [...(insertedSlots as ShiftSlot[])].sort(
-    (a, b) => serviceRank(a.service_type) - serviceRank(b.service_type)
-  );
+  // Step 4: Group each ambulance/service/shift-window's driver + attendant slot
+  // so they are crewed together as a proximity-compatible pair (UC-005).
+  const groups = new Map<string, SlotGroup>();
+  for (const slot of insertedSlots as ShiftSlot[]) {
+    const key = `${slot.ambulance_id}|${slot.service_type}|${slot.start_time}`;
+    const group = groups.get(key) ?? { key, service_type: slot.service_type };
+    if (slot.crew_position === 'driver') group.driverSlot = slot;
+    else group.attendantSlot = slot;
+    groups.set(key, group);
+  }
 
-  for (const slot of orderedSlots) {
+  // Fill the most constrained slots first: EAS can only be crewed by
+  // drivers/paramedics, so crew EAS pairs before MTS to conserve scarce staff.
+  const orderedGroups = [...groups.values()].sort((a, b) => {
+    const rank = (s: string) => (s === 'EAS' ? 0 : 1);
+    if (rank(a.service_type) !== rank(b.service_type)) return rank(a.service_type) - rank(b.service_type);
+    return a.key.localeCompare(b.key);
+  });
+
+  for (const group of orderedGroups) {
     try {
-      const filterResults = await getEligibleCandidates(slot, rosterDate);
-      const ranked = await rankCandidates(filterResults, slot, rosterDate);
+      const rankedDrivers = group.driverSlot
+        ? await rankedPoolForPosition(group.driverSlot, rosterDate, DRIVER_ROLES)
+        : [];
+      const rankedAttendants = group.attendantSlot
+        ? await rankedPoolForPosition(group.attendantSlot, rosterDate, ATTENDANT_ROLES)
+        : [];
 
-      if (ranked.length === 0) {
-        // No eligible candidates — raise coverage_gap flag
-        await raiseFlag(
-          rosterId,
-          slot.slot_id,
-          null,
-          'coverage_gap',
-          'critical',
-          `No eligible staff for slot ${slot.slot_id} (${slot.service_type} ${slot.crew_position} ${slot.start_time}–${slot.end_time})`
-        );
-        flagsRaised++;
-        continue;
+      const pair = pairCrew(rankedDrivers, rankedAttendants);
+
+      // Assign the driver side
+      if (group.driverSlot) {
+        if (pair.driver) {
+          const err = await assignStaffToSlot(group.driverSlot.slot_id, pair.driver);
+          if (err) {
+            errors.push(`Slot ${group.driverSlot.slot_id} (driver): ${err}`);
+          } else {
+            assignmentsMade++;
+            if (pair.driver.consecutive_days_flag) {
+              await raiseFlag(
+                rosterId,
+                group.driverSlot.slot_id,
+                pair.driver.staff_id,
+                'consecutive_days',
+                'warning',
+                `Driver ${pair.driver.full_name} has worked ${pair.driver.consecutive_days_count} consecutive days prior to ${rosterDate}`
+              );
+              flagsRaised++;
+            }
+          }
+        } else {
+          await raiseFlag(
+            rosterId,
+            group.driverSlot.slot_id,
+            null,
+            'coverage_gap',
+            'critical',
+            `No eligible driver for ${group.service_type} slot ${group.driverSlot.slot_id} (${group.driverSlot.start_time}–${group.driverSlot.end_time})`
+          );
+          flagsRaised++;
+        }
       }
 
-      const best = ranked[0];
-
-      // Assign
-      const { error: assignError } = await supabaseAdmin.from('assignments').insert({
-        slot_id: slot.slot_id,
-        staff_id: best.staff_id,
-        score: best.score,
-        status: 'assigned',
-        assigned_at: new Date().toISOString(),
-      });
-
-      if (assignError) {
-        errors.push(`Slot ${slot.slot_id}: ${assignError.message}`);
-        continue;
+      // Assign the attendant side
+      if (group.attendantSlot) {
+        if (pair.attendant) {
+          const err = await assignStaffToSlot(group.attendantSlot.slot_id, pair.attendant);
+          if (err) {
+            errors.push(`Slot ${group.attendantSlot.slot_id} (attendant): ${err}`);
+          } else {
+            assignmentsMade++;
+            if (pair.attendant.consecutive_days_flag) {
+              await raiseFlag(
+                rosterId,
+                group.attendantSlot.slot_id,
+                pair.attendant.staff_id,
+                'consecutive_days',
+                'warning',
+                `Attendant ${pair.attendant.full_name} has worked ${pair.attendant.consecutive_days_count} consecutive days prior to ${rosterDate}`
+              );
+              flagsRaised++;
+            }
+          }
+        } else {
+          await raiseFlag(
+            rosterId,
+            group.attendantSlot.slot_id,
+            null,
+            'coverage_gap',
+            'critical',
+            `No eligible attendant for ${group.service_type} slot ${group.attendantSlot.slot_id} (${group.attendantSlot.start_time}–${group.attendantSlot.end_time})`
+          );
+          flagsRaised++;
+        }
       }
 
-      assignmentsMade++;
-
-      // Raise consecutive days soft flag if applicable
-      if (best.consecutive_days_flag) {
-        await raiseFlag(
-          rosterId,
-          slot.slot_id,
-          best.staff_id,
-          'consecutive_days',
-          'warning',
-          `Staff ${best.full_name} has worked ${best.consecutive_days_count} consecutive days prior to ${rosterDate}`
-        );
-        flagsRaised++;
+      // A crew pair that had to be formed across an unacceptable distance.
+      if (pair.driver && pair.attendant) {
+        pairsFormed++;
+        if (pair.proximity_flag) {
+          await raiseFlag(
+            rosterId,
+            group.driverSlot?.slot_id ?? group.attendantSlot?.slot_id ?? null,
+            pair.driver.staff_id,
+            'other',
+            'info',
+            `Proximity: ${pair.driver.full_name} and ${pair.attendant.full_name} live ~${pair.pair_distance_km ?? '?'}km apart (exceeds the pairing radius) on the ${group.service_type} ${group.driverSlot?.start_time ?? ''} shift`
+          );
+          flagsRaised++;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`Slot ${slot.slot_id}: ${msg}`);
+      errors.push(`Group ${group.key}: ${msg}`);
     }
   }
 
@@ -251,6 +353,7 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
       roster_date: rosterDate,
       slots_created: slotsCreated,
       assignments_made: assignmentsMade,
+      pairs_formed: pairsFormed,
       flags_raised: flagsRaised,
     },
   });
@@ -261,6 +364,7 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
     slots_created: slotsCreated,
     assignments_made: assignmentsMade,
     flags_raised: flagsRaised,
+    pairs_formed: pairsFormed,
     errors,
   };
 }

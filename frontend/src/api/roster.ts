@@ -54,6 +54,7 @@ interface RankedCandidateRow {
   score: number;
   rest_hours: number;
   late_shift_count: number;
+  proximity_km?: number;
 }
 
 interface ReplacementCandidate {
@@ -63,6 +64,7 @@ interface ReplacementCandidate {
   active_flags: number;
   score: number;
   reason: string;
+  proximity_km?: number;
 }
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
@@ -186,6 +188,7 @@ function mapCandidate(c: RankedCandidateRow): ReplacementCandidate {
     active_flags: 0,
     score: c.score,
     reason,
+    proximity_km: c.proximity_km,
   };
 }
 

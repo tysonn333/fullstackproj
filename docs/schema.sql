@@ -52,6 +52,17 @@ CREATE TABLE staff_certifications (
     UNIQUE (staff_id, cert_name)
 );
 
+-- staff_preferences (UC-005 — Guan Hee)
+-- Soft shift-time preferences used by the ranking engine's preference score.
+--   prefers_early → likes shifts starting before 12:00 (early riser)
+--   prefers_late  → likes shifts starting from 12:00 onwards (late shift)
+CREATE TABLE staff_preferences (
+    staff_id      INT PRIMARY KEY REFERENCES staff(staff_id) ON DELETE CASCADE,
+    prefers_early BOOLEAN NOT NULL DEFAULT FALSE,
+    prefers_late  BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- availability
 CREATE TABLE availability (
     availability_id SERIAL PRIMARY KEY,

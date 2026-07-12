@@ -22,11 +22,27 @@ A full-stack web application for managing ambulance crew rosters, staff availabi
 The EFAR Ambulance Scheduling System replaces a manual, spreadsheet-based rostering process with an automated scheduling engine. Key features include:
 
 - Staff and certification management
-- Availability and leave request tracking
+- Availability and leave request tracking, plus a direct **availability form**
 - Automated roster generation with conflict detection (flags)
-- Shift slot assignment with scoring
+- Shift slot assignment with composite scoring **and driver + attendant crew pairing**
+- **Roster timeline view** that aligns irregular shift times on a shared axis
+- **Calendar integration** — export a roster or a staff member's shifts as `.ics`
 - Audit logging for all scheduling actions
-- Role-based access (Admin / Ops Director)
+- Role-based access (Admin / Employee)
+
+### Scheduling engine highlights (UC-004 / UC-005 — Guan Hee)
+
+- **UC-004 filter pipeline** runs five ordered checks — availability → rest hours
+  → daily hours → consecutive days (soft flag) → certification — and now
+  validates a **real, unexpired certification** for the slot's service type.
+  Every candidate carries a `filter_trace` showing exactly which checks passed
+  or failed.
+- **UC-005 ranking** scores each candidate on a weighted composite of *fairness,
+  rest, proximity, certification fit, preference,* and *continuity*. Proximity is
+  derived from Singapore postal districts (`services/scheduling/proximity.ts`).
+- **UC-005 crew pairing** (`pairCrew`) pairs the best driver with the best
+  attendant, walking the ranked pools for a **proximity-compatible** pair and
+  raising a proximity flag only when no compatible pair exists.
 
 ---
 
@@ -136,6 +152,11 @@ This creates all tables, constraints, and indexes.
 > `docs/migrations/2026-07-05-allow-overnight-shifts.sql` in the SQL Editor.
 > The original schema rejected overnight shift slots (18:00 → 06:00), which
 > made roster generation fail on every call.
+>
+> **Also run** `docs/migrations/2026-07-12-staff-preferences.sql` to add the
+> `staff_preferences` table used by the UC-005 preference score. The ranking
+> engine tolerates its absence, but the preference component only varies once
+> the table exists and is populated (the seed script fills it in).
 
 ### 2. Seed initial data (optional)
 
@@ -145,8 +166,10 @@ This inserts:
 - 3 ambulances (AMB-001 MTS, AMB-002 EAS, AMB-003 both)
 - 20 staff members with certifications (12 EAS-capable drivers/paramedics +
   8 MTS-only medics/EMTs) — enough to fully crew day + night shifts across all
-  three ambulances with a small buffer
+  three ambulances with a small buffer. Home postal codes span several Singapore
+  districts so UC-005 proximity scoring and crew pairing have real signal.
 - Availability records for all staff for today and the next 7 days
+- Staff shift-time preferences (early riser / late shift) for UC-005 scoring
 
 The seed script is safe to re-run: it resets all operational data first (but
 leaves your `profiles` / login accounts intact).
@@ -169,6 +192,22 @@ email (or set `profiles.staff_id` manually).
 > `admin`/`ops_director` roles, run
 > `docs/migrations/2026-07-09-roles-and-staff-link.sql` (edit the admin email
 > inside it first) to switch to the `admin`/`employee` model and add the staff link.
+
+---
+
+## Calendar Integration
+
+Rosters and individual schedules can be exported as iCalendar (`.ics`) files and
+imported into Google Calendar, Apple Calendar, or Outlook.
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /api/v1/roster/:id/calendar.ics` | Every crewed shift in a roster |
+| `GET /api/v1/staff/:id/schedule.ics`  | One staff member's assigned shifts |
+
+In the UI, use **Add to Calendar** on the Roster View (whole roster) or inside a
+staff member's detail modal (their shifts). Both require a logged-in session; the
+frontend fetches the file with the auth token and downloads it in the browser.
 
 ---
 

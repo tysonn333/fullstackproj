@@ -17,6 +17,9 @@
 -- -------------------------------------------------------------
 -- Reset operational data (keeps profiles / auth users)
 -- -------------------------------------------------------------
+-- CASCADE clears dependent rows (staff_certifications, staff_preferences,
+-- availability, assignments, …) via their foreign keys, so tables added by
+-- later migrations do not need to be listed here explicitly.
 TRUNCATE
     ambulances,
     staff,
@@ -98,3 +101,18 @@ SELECT
 FROM
     staff s
     CROSS JOIN (SELECT generate_series(0, 7) AS n) AS offset_days;
+
+-- -------------------------------------------------------------
+-- Staff Preferences (UC-005 preference scoring)
+-- Give a spread of early-riser / late-shift preferences so the ranking
+-- engine's preference component varies across candidates. Requires the
+-- staff_preferences table (schema.sql or the 2026-07-12 migration).
+-- Odd staff_id → early riser; every third staff_id → late shift.
+-- -------------------------------------------------------------
+INSERT INTO staff_preferences (staff_id, prefers_early, prefers_late)
+SELECT
+    staff_id,
+    (staff_id % 2 = 1),
+    (staff_id % 3 = 0)
+FROM staff
+ON CONFLICT (staff_id) DO NOTHING;

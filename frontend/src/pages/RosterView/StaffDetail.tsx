@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { format, startOfWeek, addDays, parseISO } from 'date-fns';
 import { staffApi } from '../../api/staff';
+import { calendarApi } from '../../api/calendar';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import type { Staff, Assignment, Certification } from '../../types';
 
@@ -20,6 +21,18 @@ export const StaffDetail: React.FC<StaffDetailProps> = ({ staff, onClose }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [certifications, setCertifications] = useState<Certification[]>(staff.certifications ?? []);
+  const [exporting, setExporting] = useState(false);
+
+  const handleExportSchedule = async () => {
+    setExporting(true);
+    try {
+      await calendarApi.downloadStaffSchedule(staff.id, staff.name);
+    } catch {
+      /* surfaced by the download failing silently; keep the modal usable */
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(parseISO(weekStart), i));
@@ -119,7 +132,21 @@ export const StaffDetail: React.FC<StaffDetailProps> = ({ staff, onClose }) => {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h4 className="font-semibold text-gray-900">Weekly Schedule</h4>
-              <span className="text-xs text-gray-500">Week of {format(parseISO(weekStart), 'MMM d, yyyy')}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleExportSchedule}
+                  disabled={exporting}
+                  className="btn-secondary btn-sm text-xs"
+                  title="Download this staff member's shifts as an .ics calendar file"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  {exporting ? 'Exporting…' : 'Add to Calendar'}
+                </button>
+                <span className="text-xs text-gray-500">Week of {format(parseISO(weekStart), 'MMM d, yyyy')}</span>
+              </div>
             </div>
 
             {loading ? (

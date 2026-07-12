@@ -2,6 +2,8 @@ import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
 import { authenticate, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { logAudit } from '../services/audit.service';
+import { buildICS, CalendarEvent } from '../lib/ics';
+import { isOvernight } from '../services/scheduling/filter';
 
 const router = Router();
 router.use(authenticate);
@@ -385,5 +387,83 @@ function getDatePlusDays(dateStr: string, days: number): string {
   d.setDate(d.getDate() + days);
   return d.toISOString().split('T')[0];
 }
+
+/**
+ * GET /api/v1/staff/:id/schedule.ics
+ * Calendar integration — exports a single staff member's assigned shifts as an
+ * iCalendar (.ics) file so they can subscribe to their own roster.
+ */
+router.get('/:id/schedule.ics', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const staffId = parseInt(req.params.id, 10);
+
+    const { data: staff } = await supabaseAdmin
+      .from('staff')
+      .select('full_name')
+      .eq('staff_id', staffId)
+      .single();
+
+    if (!staff) {
+      res.status(404).json({ error: 'Staff not found' });
+      return;
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('assignments')
+      .select(`
+        slot_id, status,
+        shift_slots!inner(
+          slot_id, start_time, end_time, service_type, crew_position,
+          ambulances(registration),
+          rosters!inner(roster_date)
+        )
+      `)
+      .eq('staff_id', staffId)
+      .neq('status', 'cancelled');
+
+    if (error) throw error;
+
+    type Row = {
+      slot_id: number;
+      shift_slots: {
+        start_time: string;
+        end_time: string;
+        service_type: string;
+        crew_position: string;
+        ambulances?: { registration?: string } | null;
+        rosters: { roster_date: string };
+      };
+    };
+
+    const events: CalendarEvent[] = [];
+    for (const row of (data ?? []) as unknown as Row[]) {
+      const s = row.shift_slots;
+      const date = s.rosters?.roster_date;
+      if (!date) continue;
+      const start = new Date(`${date}T${s.start_time}+08:00`);
+      const end = new Date(`${date}T${s.end_time}+08:00`);
+      if (isOvernight(s.start_time, s.end_time)) end.setDate(end.getDate() + 1);
+      const reg = s.ambulances?.registration ?? `AMB-${row.slot_id}`;
+      events.push({
+        uid: `efar-slot-${row.slot_id}-staff-${staffId}@efar`,
+        summary: `${s.service_type} ${s.crew_position} — ${reg}`,
+        description: `${staff.full_name} · ${s.service_type} ${s.crew_position} on ${reg}`,
+        location: reg,
+        start,
+        end,
+      });
+    }
+
+    const ics = buildICS(`EFAR — ${staff.full_name} schedule`, events, new Date());
+
+    res
+      .status(200)
+      .type('text/calendar')
+      .set('Content-Disposition', `attachment; filename="efar-${staffId}-schedule.ics"`)
+      .send(ics);
+  } catch (err) {
+    next(err);
+  }
+});
 
 export default router;
