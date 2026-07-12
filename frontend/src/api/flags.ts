@@ -35,7 +35,8 @@ const FLAG_TYPE_LABELS: Record<string, string> = {
 };
 
 function mapFlagStatus(status: string): FlagStatus {
-  if (status === 'auto_resolved') return 'resolved';
+  // auto_resolved is surfaced distinctly (UC-008 A3) so the admin can see
+  // which flags the system closed on its own.
   return status as FlagStatus;
 }
 

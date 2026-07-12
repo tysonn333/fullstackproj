@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { differenceInDays } from 'date-fns';
-import { staffApi } from '../../api/staff';
+import { staffApi, type ExpiringCert } from '../../api/staff';
 import { StaffForm } from './StaffForm';
 import { CertificationsPanel } from './CertificationsPanel';
 import { PageLoader } from '../../components/LoadingSpinner';
@@ -64,6 +64,15 @@ export const StaffManagement: React.FC = () => {
     return () => clearTimeout(timer);
   }, [loadStaff]);
 
+  // UC-007 A1 — certification expiry alerts (30-day window incl. expired).
+  const [expiringCerts, setExpiringCerts] = useState<ExpiringCert[]>([]);
+  useEffect(() => {
+    staffApi
+      .getExpiringCerts(30)
+      .then(setExpiringCerts)
+      .catch(() => setExpiringCerts([]));
+  }, []);
+
   const handleCreate = () => {
     setSelectedStaff(null);
     setDrawerMode('create');
@@ -126,6 +135,38 @@ export const StaffManagement: React.FC = () => {
           Add Staff Member
         </button>
       </div>
+
+      {/* UC-007 A1 — certification expiry alerts */}
+      {expiringCerts.length > 0 && (
+        <div className="mb-5 card border-amber-200 bg-amber-50/60">
+          <div className="px-4 py-3">
+            <div className="flex items-center gap-2 mb-2">
+              <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+              <p className="text-sm font-semibold text-amber-800">
+                {expiringCerts.length} certification{expiringCerts.length === 1 ? '' : 's'} expired or expiring within 30 days
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {expiringCerts.map((c) => (
+                <span
+                  key={c.cert_id}
+                  className={`badge text-xs ${c.expired ? 'badge-red' : 'badge-yellow'}`}
+                  title={`${c.cert_name} · expires ${c.expiry_date}`}
+                >
+                  {c.staff_name} — {c.cert_name}{' '}
+                  {c.expired ? '(expired)' : `(${c.days_to_expiry}d left)`}
+                </span>
+              ))}
+            </div>
+            <p className="text-xs text-amber-700 mt-2">
+              Expired certifications remove staff from the eligible pool for that service type (UC-004 Filter 5).
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">

@@ -73,15 +73,17 @@ router.put('/:id/approve', requireAdmin, async (req: AuthenticatedRequest, res: 
   try {
     const leaveId = parseInt(req.params.id, 10);
     const { notes } = req.body;
-    const { leave, conflicts } = await approveLeave(leaveId, req.user!.id, notes);
+    const { leave, conflicts, flags_raised } = await approveLeave(leaveId, req.user!.id, notes);
 
     res.json({
       data: leave,
       conflicts_count: conflicts.length,
       conflicting_assignment_ids: conflicts,
+      flags_raised,
       message:
         conflicts.length > 0
-          ? `Leave approved. Warning: ${conflicts.length} existing assignment(s) conflict with this leave.`
+          ? `Leave approved. Warning: ${conflicts.length} existing assignment(s) conflict with this leave` +
+            (flags_raised > 0 ? ` — ${flags_raised} flag(s) raised in the exceptions panel.` : '.')
           : 'Leave approved successfully.',
     });
   } catch (err: unknown) {

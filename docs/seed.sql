@@ -116,3 +116,11 @@ SELECT
     (staff_id % 3 = 0)
 FROM staff
 ON CONFLICT (staff_id) DO NOTHING;
+
+-- Buddy preferences (soft signal, UC-005 A3): pair a couple of drivers with
+-- attendants they like working with. John Tan (9) ↔ Mary Lim (1);
+-- Kevin Ng (10) ↔ Sarah Wong (17).
+UPDATE staff_preferences SET buddy_staff_id = 1  WHERE staff_id = 9;
+UPDATE staff_preferences SET buddy_staff_id = 9  WHERE staff_id = 1;
+UPDATE staff_preferences SET buddy_staff_id = 17 WHERE staff_id = 10;
+UPDATE staff_preferences SET buddy_staff_id = 10 WHERE staff_id = 17;

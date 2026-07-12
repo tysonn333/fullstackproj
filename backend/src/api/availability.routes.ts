@@ -3,8 +3,35 @@ import supabaseAdmin from '../lib/supabase';
 import { authenticate, ensureSelfOrAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { logAudit } from '../services/audit.service';
 import { parseWhatsAppMessage } from '../integrations/whatsapp';
+import {
+  raiseHalfDayGapFlags,
+  raiseFullDayConflictFlags,
+} from '../services/coverage.service';
 
 const router = Router();
+
+/**
+ * Coverage-gap detection for a changed availability record (UC-003 / Chad).
+ * half_day='am' means only the AM half is available → the PM half is blocked.
+ * Returns the number of flags raised.
+ */
+async function detectCoverageGaps(
+  staffId: number,
+  staffName: string,
+  workDate: string,
+  isAvailable: boolean,
+  halfDay: 'am' | 'pm' | null,
+  source: string
+): Promise<number> {
+  if (!isAvailable) {
+    return raiseFullDayConflictFlags(staffId, staffName, [workDate], `unavailability (${source})`);
+  }
+  if (halfDay) {
+    const blockedHalf = halfDay === 'am' ? 'pm' : 'am';
+    return raiseHalfDayGapFlags(staffId, staffName, workDate, blockedHalf, source);
+  }
+  return 0;
+}
 
 /**
  * GET /api/v1/staff/:id/availability
@@ -82,7 +109,23 @@ router.post(
         details: { staff_id: staffId, work_date, is_available, half_day },
       });
 
-      res.status(201).json({ data });
+      // Chad (UC-003): a reduced availability may strand existing assignments —
+      // raise half_day_gap / coverage_gap flags for the exceptions panel.
+      const { data: staffRow } = await supabaseAdmin
+        .from('staff')
+        .select('full_name')
+        .eq('staff_id', staffId)
+        .single();
+      const flagsRaised = await detectCoverageGaps(
+        staffId,
+        staffRow?.full_name ?? `Staff ${staffId}`,
+        work_date,
+        Boolean(is_available),
+        half_day ?? null,
+        'availability update'
+      );
+
+      res.status(201).json({ data, flags_raised: flagsRaised });
     } catch (err) {
       next(err);
     }
@@ -149,6 +192,17 @@ router.post('/integrations/whatsapp/webhook', async (req: AuthenticatedRequest, 
 
     if (availErr) throw availErr;
 
+    // Chad (UC-003 A2): part-timer half-day availability via WhatsApp can
+    // create a staffing gap on an already-crewed slot — flag it immediately.
+    const flagsRaised = await detectCoverageGaps(
+      staff.staff_id,
+      staff.full_name,
+      workDate,
+      parsed.is_available,
+      parsed.half_day ?? null,
+      'WhatsApp availability'
+    );
+
     res.json({
       received: true,
       processed: true,
@@ -156,6 +210,7 @@ router.post('/integrations/whatsapp/webhook', async (req: AuthenticatedRequest, 
       staff_id: staff.staff_id,
       work_date: workDate,
       is_available: parsed.is_available,
+      flags_raised: flagsRaised,
     });
   } catch (err) {
     next(err);

@@ -1,5 +1,38 @@
 import apiClient from './client';
-import type { Staff, Certification, StaffFilters, PaginatedResponse, Assignment, JobType } from '../types';
+import type {
+  Staff,
+  Certification,
+  StaffFilters,
+  StaffPreferences,
+  PaginatedResponse,
+  Assignment,
+  JobType,
+} from '../types';
+
+export interface ExpiringCert {
+  cert_id: number;
+  staff_id: number;
+  staff_name: string;
+  staff_role: string;
+  cert_name: string;
+  expiry_date: string;
+  expired: boolean;
+  days_to_expiry: number;
+}
+
+export interface MarkUnavailableResult {
+  staff_id: number;
+  date: string;
+  assignments_cancelled: number;
+  flags_raised: number;
+  affected_slots: Array<{
+    slot_id: number;
+    start_time: string;
+    end_time: string;
+    service_type: string;
+    crew_position: string;
+  }>;
+}
 
 // ─── Row types (raw Supabase rows returned by the backend) ────────────────────
 
@@ -139,6 +172,51 @@ export const staffApi = {
 
   removeCertification: async (staffId: string, certId: string): Promise<void> => {
     await apiClient.delete(`/api/v1/staff/${staffId}/certifications/${certId}`);
+  },
+
+  // Preferences (UC-005 / UC-007 soft signals)
+  getPreferences: async (staffId: string): Promise<StaffPreferences> => {
+    const { data } = await apiClient.get<{
+      data: { staff_id: number; prefers_early: boolean; prefers_late: boolean; buddy_staff_id: number | null };
+    }>(`/api/v1/staff/${staffId}/preferences`);
+    return {
+      staff_id: String(data.data.staff_id),
+      prefers_early: data.data.prefers_early,
+      prefers_late: data.data.prefers_late,
+      buddy_staff_id: data.data.buddy_staff_id != null ? String(data.data.buddy_staff_id) : null,
+    };
+  },
+
+  updatePreferences: async (
+    staffId: string,
+    prefs: { prefers_early: boolean; prefers_late: boolean; buddy_staff_id: string | null }
+  ): Promise<void> => {
+    await apiClient.put(`/api/v1/staff/${staffId}/preferences`, {
+      prefers_early: prefs.prefers_early,
+      prefers_late: prefs.prefers_late,
+      buddy_staff_id: prefs.buddy_staff_id != null ? Number(prefs.buddy_staff_id) : null,
+    });
+  },
+
+  // UC-006 A3 — staff absent for the whole day
+  markUnavailable: async (
+    staffId: string,
+    date: string,
+    reason?: string
+  ): Promise<MarkUnavailableResult> => {
+    const { data } = await apiClient.post<MarkUnavailableResult>(
+      `/api/v1/staff/${staffId}/mark-unavailable`,
+      { date, reason }
+    );
+    return data;
+  },
+
+  // UC-007 A1 — certification expiry alerts
+  getExpiringCerts: async (days = 30): Promise<ExpiringCert[]> => {
+    const { data } = await apiClient.get<{ data: ExpiringCert[] }>(
+      `/api/v1/staff/expiring-certs?days=${days}`
+    );
+    return data.data ?? [];
   },
 
   getWeeklySchedule: async (

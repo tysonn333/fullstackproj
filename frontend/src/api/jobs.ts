@@ -67,4 +67,10 @@ export const jobsApi = {
     );
     return { imported: data.imported ?? 0, data: (data.data ?? []).map(mapJob) };
   },
+
+  /** Imports a raw call-centre CSV export (UC-002 job feed). */
+  importRaw: async (raw: string): Promise<{ imported: number }> => {
+    const { data } = await apiClient.post<{ imported: number }>('/api/v1/jobs/import', { raw });
+    return { imported: data.imported ?? 0 };
+  },
 };

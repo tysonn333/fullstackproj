@@ -13,6 +13,7 @@ export type AuditAction =
   | 'resolve'
   | 'dismiss'
   | 'import'
+  | 'mark_unavailable'
   | 'login'
   | 'logout';
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { ShiftSlot, Staff } from '../../types';
+import type { ShiftSlot, Staff, JobType, StaffRole } from '../../types';
 
 interface CrewGridProps {
   slots: ShiftSlot[];
@@ -8,6 +8,9 @@ interface CrewGridProps {
   isWeekendOrHoliday: boolean;
   onStaffClick: (staff: Staff) => void;
   exceptionsPanel?: React.ReactNode;
+  /** UC-001 A4 — non-matching rows are greyed out, never removed. */
+  serviceFilter?: JobType | '';
+  roleFilter?: StaffRole | '';
 }
 
 const jobTypeBadge: Record<string, string> = {
@@ -45,6 +48,8 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
   isWeekendOrHoliday,
   onStaffClick,
   exceptionsPanel,
+  serviceFilter = '',
+  roleFilter = '',
 }) => {
   const [expandedSlot, setExpandedSlot] = useState<string | null>(null);
 
@@ -52,6 +57,19 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
   // would contradict the stats bar and mask unfilled shifts. Any weekend/PH
   // ambulance reduction happens at generation time on the backend.
   const displaySlots = slots;
+
+  // UC-001 A4: filters grey rows out (opacity) so the full picture stays visible.
+  const matchesFilters = (slot: ShiftSlot): boolean => {
+    if (serviceFilter && slot.job_type !== serviceFilter) return false;
+    if (roleFilter) {
+      const assignments = slot.assignments || [];
+      const roleMatch =
+        (roleFilter === 'driver' && slot.required_role === 'driver') ||
+        assignments.some((a) => a.staff?.role === roleFilter);
+      if (!roleMatch) return false;
+    }
+    return true;
+  };
 
   return (
     <div className="flex gap-4">
@@ -100,12 +118,14 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                 ((a.staff as Staff & { consecutive_days?: number })?.consecutive_days ?? 0) >= 7
               );
 
+              const dimmed = !matchesFilters(slot);
+
               return (
                 <div
                   key={slot.id}
-                  className={`card overflow-hidden transition-shadow ${
+                  className={`card overflow-hidden transition-all ${
                     isExpanded ? 'shadow-card-hover ring-1 ring-blue-200' : ''
-                  }`}
+                  } ${dimmed ? 'opacity-35 grayscale' : ''}`}
                 >
                   {/* Slot header row */}
                   <div

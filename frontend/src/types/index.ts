@@ -29,6 +29,14 @@ export interface Certification {
   updated_at: string;
 }
 
+// UC-005 / UC-007 soft scheduling signals
+export interface StaffPreferences {
+  staff_id: string;
+  prefers_early: boolean;
+  prefers_late: boolean;
+  buddy_staff_id: string | null;
+}
+
 // ─── Availability & Leave Types ───────────────────────────────────────────────
 
 export type LeaveType = 'full_day' | 'half_am' | 'half_pm';
@@ -141,7 +149,7 @@ export interface Job {
 
 export type FlagSeverity = 'critical' | 'warning' | 'info';
 export type FlagType = 'coverage_gap' | 'consecutive_days' | 'half_day_gap' | 'cert_mismatch' | 'rest_violation' | 'other';
-export type FlagStatus = 'active' | 'resolved' | 'dismissed';
+export type FlagStatus = 'active' | 'resolved' | 'dismissed' | 'auto_resolved';
 
 export interface ReplacementCandidate {
   staff_id: string;

@@ -24,14 +24,20 @@
  */
 
 import supabaseAdmin from '../../lib/supabase';
-import { getEligibleCandidates, ShiftSlot, FilterResult } from './filter';
-import { rankCandidates, pairCrew, RankedCandidate } from './ranking';
+import { getEligibleCandidates, ShiftSlot, FilterResult, timeToMinutes } from './filter';
+import { rankCandidates, pairCrew, RankedCandidate, BuddyMap } from './ranking';
 import { logAudit } from '../audit.service';
 
 interface GenerateOptions {
   rosterDate: string; // "YYYY-MM-DD"
   actorId: string;    // UUID of user triggering generation
   force?: boolean;    // If true, overwrites existing draft
+  /**
+   * UC-002 A1: when the call-centre job list has not arrived, generation is
+   * deferred by default. Pass allowSkeleton=true to generate a skeleton roster
+   * from historical/standard coverage (all active ambulances) anyway.
+   */
+  allowSkeleton?: boolean;
 }
 
 interface GenerateResult {
@@ -41,7 +47,76 @@ interface GenerateResult {
   assignments_made: number;
   flags_raised: number;
   pairs_formed: number;
+  jobs_considered: number;
+  ambulances_rostered: number;
+  skeleton: boolean;
+  weekend_or_holiday: boolean;
   errors: string[];
+}
+
+/**
+ * Raised when generation is requested but the call-centre job list for the
+ * date has not been imported yet (UC-002 A1 — defer and notify admin).
+ */
+export class NoJobListError extends Error {
+  code = 'NO_JOB_LIST' as const;
+  constructor(rosterDate: string) {
+    super(
+      `Job list for ${rosterDate} not yet available. Auto-generation deferred — ` +
+        `import the call-centre job list first, or generate a skeleton roster based on standard coverage.`
+    );
+  }
+}
+
+// Singapore public holidays (static reference list; extend per year).
+const SG_PUBLIC_HOLIDAYS = new Set([
+  // 2025
+  '2025-01-01', '2025-01-29', '2025-01-30', '2025-03-31', '2025-04-18',
+  '2025-05-01', '2025-05-12', '2025-06-07', '2025-08-09', '2025-10-20', '2025-12-25',
+  // 2026
+  '2026-01-01', '2026-02-17', '2026-02-18', '2026-03-21', '2026-04-03',
+  '2026-05-01', '2026-05-27', '2026-06-01', '2026-08-10', '2026-11-09', '2026-12-25',
+]);
+
+/** Weekend / public-holiday days run the reduced 2-ambulance baseline (UC-002 A3). */
+export function isWeekendOrPublicHoliday(dateStr: string): boolean {
+  const day = new Date(`${dateStr}T00:00:00`).getDay();
+  return day === 0 || day === 6 || SG_PUBLIC_HOLIDAYS.has(dateStr);
+}
+
+const WEEKEND_BASELINE_AMBULANCES = 2;
+
+// Each job is assumed to occupy a crew for this long from its pickup time when
+// estimating how many ambulances must run concurrently.
+const JOB_DURATION_MINUTES = 120;
+
+interface JobRow {
+  job_id: number;
+  pickup_time: string;
+  service_type: 'MTS' | 'EAS';
+}
+
+/**
+ * Peak number of jobs in-flight at the same moment, treating each job as a
+ * [pickup, pickup + JOB_DURATION_MINUTES) interval. Two simultaneous 06:30
+ * jobs → peak 2 → at least 2 ambulances needed (UC-002 main flow step 3).
+ */
+export function peakConcurrentJobs(jobs: Array<{ pickup_time: string }>): number {
+  if (jobs.length === 0) return 0;
+  const events: Array<{ t: number; delta: number }> = [];
+  for (const job of jobs) {
+    const start = timeToMinutes(job.pickup_time);
+    events.push({ t: start, delta: 1 });
+    events.push({ t: start + JOB_DURATION_MINUTES, delta: -1 });
+  }
+  events.sort((a, b) => a.t - b.t || a.delta - b.delta);
+  let current = 0;
+  let peak = 0;
+  for (const ev of events) {
+    current += ev.delta;
+    peak = Math.max(peak, current);
+  }
+  return peak;
 }
 
 const DAY_SHIFT_START = '06:00:00';
@@ -162,25 +237,113 @@ interface SlotGroup {
   attendantSlot?: ShiftSlot;
 }
 
+/** Loads buddy preferences (UC-005 A3) — tolerant of the table being absent. */
+async function loadBuddyMap(): Promise<BuddyMap> {
+  const map: BuddyMap = new Map();
+  try {
+    const { data } = await supabaseAdmin
+      .from('staff_preferences')
+      .select('staff_id, buddy_staff_id')
+      .not('buddy_staff_id', 'is', null);
+    for (const row of (data ?? []) as Array<{ staff_id: number; buddy_staff_id: number }>) {
+      if (row.buddy_staff_id != null) map.set(row.staff_id, row.buddy_staff_id);
+    }
+  } catch {
+    // staff_preferences (or the buddy column) may not exist yet — soft signal only
+  }
+  return map;
+}
+
 export async function generateRoster(options: GenerateOptions): Promise<GenerateResult> {
-  const { rosterDate, actorId, force = false } = options;
+  const { rosterDate, actorId, force = false, allowSkeleton = false } = options;
   const errors: string[] = [];
   let slotsCreated = 0;
   let assignmentsMade = 0;
   let flagsRaised = 0;
   let pairsFormed = 0;
 
+  // Step 0: Retrieve the call-centre job list for the date (UC-002 step 1).
+  // Deferred with NoJobListError when absent, unless the admin explicitly
+  // asked for a skeleton roster (A1). Checked BEFORE touching the roster row
+  // so a deferred run never wipes an existing draft.
+  const { data: jobRows, error: jobsError } = await supabaseAdmin
+    .from('jobs')
+    .select('job_id, pickup_time, service_type')
+    .eq('job_date', rosterDate);
+
+  if (jobsError) {
+    throw new Error(`Failed to read job list: ${jobsError.message}`);
+  }
+
+  const jobs = (jobRows ?? []) as JobRow[];
+  const skeleton = jobs.length === 0;
+
+  if (skeleton && !allowSkeleton) {
+    throw new NoJobListError(rosterDate);
+  }
+
+  const weekendOrHoliday = isWeekendOrPublicHoliday(rosterDate);
+
   // Step 1: Create / reset roster row
   const rosterId = await upsertRoster(rosterDate, force);
 
   // Step 2: Fetch active ambulances
-  const { data: ambulances, error: ambError } = await supabaseAdmin
+  const { data: allAmbulances, error: ambError } = await supabaseAdmin
     .from('ambulances')
     .select('ambulance_id, registration, service_type')
     .eq('status', 'active');
 
-  if (ambError || !ambulances || ambulances.length === 0) {
+  if (ambError || !allAmbulances || allAmbulances.length === 0) {
     throw new Error('No active ambulances found for roster generation');
+  }
+
+  // Step 2b: Decide how many ambulances to run and which ones (UC-002 step 3).
+  //   • Job-driven days: peak concurrent jobs sets the minimum fleet size.
+  //   • Skeleton days: standard coverage — the whole active fleet.
+  //   • Weekend / public holiday (A3): reduced to the 2-ambulance baseline.
+  const easJobs = jobs.filter((j) => j.service_type === 'EAS').length;
+  const mtsJobs = jobs.filter((j) => j.service_type === 'MTS').length;
+  const peak = peakConcurrentJobs(jobs);
+
+  let ambulancesNeeded = skeleton ? allAmbulances.length : Math.max(1, peak);
+  if (weekendOrHoliday) {
+    ambulancesNeeded = Math.min(ambulancesNeeded, WEEKEND_BASELINE_AMBULANCES);
+    // The baseline always keeps two ambulances on the road for discharge + A&E.
+    ambulancesNeeded = Math.max(
+      Math.min(WEEKEND_BASELINE_AMBULANCES, allAmbulances.length),
+      Math.min(ambulancesNeeded, allAmbulances.length)
+    );
+  }
+  ambulancesNeeded = Math.min(ambulancesNeeded, allAmbulances.length);
+
+  // Prefer ambulances whose service type matches the day's job mix: EAS demand
+  // pulls EAS/both vehicles to the front, MTS demand pulls MTS/both.
+  const coverageScore = (svc: string): number => {
+    let score = 0;
+    if (easJobs > 0 && (svc === 'EAS' || svc === 'both')) score += 2;
+    if (mtsJobs > 0 && (svc === 'MTS' || svc === 'both')) score += 1;
+    if (skeleton) score += svc === 'both' ? 1 : 0;
+    return score;
+  };
+  const ambulances = [...allAmbulances]
+    .sort(
+      (a, b) =>
+        coverageScore(b.service_type) - coverageScore(a.service_type) ||
+        a.ambulance_id - b.ambulance_id
+    )
+    .slice(0, ambulancesNeeded);
+
+  // Demand beyond the fleet cannot be covered — surface it immediately.
+  if (!skeleton && peak > allAmbulances.length) {
+    await raiseFlag(
+      rosterId,
+      null,
+      null,
+      'coverage_gap',
+      'critical',
+      `Job demand peaks at ${peak} concurrent job(s) but only ${allAmbulances.length} ambulance(s) are active on ${rosterDate}`
+    );
+    flagsRaised++;
   }
 
   // Step 3: Create shift slots
@@ -245,6 +408,8 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
     return a.key.localeCompare(b.key);
   });
 
+  const buddyMap = await loadBuddyMap();
+
   for (const group of orderedGroups) {
     try {
       const rankedDrivers = group.driverSlot
@@ -254,7 +419,7 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
         ? await rankedPoolForPosition(group.attendantSlot, rosterDate, ATTENDANT_ROLES)
         : [];
 
-      const pair = pairCrew(rankedDrivers, rankedAttendants);
+      const pair = pairCrew(rankedDrivers, rankedAttendants, buddyMap);
 
       // Assign the driver side
       if (group.driverSlot) {
@@ -322,6 +487,26 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
         }
       }
 
+      // UC-008 flag table: "Buddy preference not met" is informational only.
+      if (pair.driver && pair.attendant && !pair.buddy_pair) {
+        const driverBuddy = buddyMap.get(pair.driver.staff_id);
+        const attendantBuddy = buddyMap.get(pair.attendant.staff_id);
+        const unmetBuddy =
+          (driverBuddy != null && driverBuddy !== pair.attendant.staff_id) ||
+          (attendantBuddy != null && attendantBuddy !== pair.driver.staff_id);
+        if (unmetBuddy) {
+          await raiseFlag(
+            rosterId,
+            group.driverSlot?.slot_id ?? group.attendantSlot?.slot_id ?? null,
+            pair.driver.staff_id,
+            'other',
+            'info',
+            `Buddy preference not met on the ${group.service_type} ${group.driverSlot?.start_time ?? ''} shift — preferred partner was unavailable or ranked too low. No action required.`
+          );
+          flagsRaised++;
+        }
+      }
+
       // A crew pair that had to be formed across an unacceptable distance.
       if (pair.driver && pair.attendant) {
         pairsFormed++;
@@ -355,6 +540,10 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
       assignments_made: assignmentsMade,
       pairs_formed: pairsFormed,
       flags_raised: flagsRaised,
+      jobs_considered: jobs.length,
+      ambulances_rostered: ambulances.length,
+      skeleton,
+      weekend_or_holiday: weekendOrHoliday,
     },
   });
 
@@ -365,6 +554,10 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
     assignments_made: assignmentsMade,
     flags_raised: flagsRaised,
     pairs_formed: pairsFormed,
+    jobs_considered: jobs.length,
+    ambulances_rostered: ambulances.length,
+    skeleton,
+    weekend_or_holiday: weekendOrHoliday,
     errors,
   };
 }

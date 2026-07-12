@@ -65,6 +65,12 @@ export const StaffForm: React.FC<StaffFormProps> = ({ staff, onSave, onCancel })
 
   const isEditing = !!staff;
 
+  // UC-007 steps 5–6: soft scheduling signals (early/late preference + buddy).
+  const [prefersEarly, setPrefersEarly] = useState(false);
+  const [prefersLate, setPrefersLate] = useState(false);
+  const [buddyId, setBuddyId] = useState<string>('');
+  const [buddyOptions, setBuddyOptions] = useState<Staff[]>([]);
+
   useEffect(() => {
     if (staff) {
       setForm({
@@ -80,6 +86,28 @@ export const StaffForm: React.FC<StaffFormProps> = ({ staff, onSave, onCancel })
       setForm(INITIAL_FORM);
     }
     setErrors({});
+  }, [staff]);
+
+  // Load current preferences + buddy candidates when editing.
+  useEffect(() => {
+    if (!staff) {
+      setPrefersEarly(false);
+      setPrefersLate(false);
+      setBuddyId('');
+      return;
+    }
+    staffApi
+      .getPreferences(staff.id)
+      .then((p) => {
+        setPrefersEarly(p.prefers_early);
+        setPrefersLate(p.prefers_late);
+        setBuddyId(p.buddy_staff_id ?? '');
+      })
+      .catch(() => { /* preferences are optional */ });
+    staffApi
+      .list({ status: 'active' })
+      .then((r) => setBuddyOptions(r.data.filter((s) => s.id !== staff.id)))
+      .catch(() => setBuddyOptions([]));
   }, [staff]);
 
   const validate = (): boolean => {
@@ -120,6 +148,16 @@ export const StaffForm: React.FC<StaffFormProps> = ({ staff, onSave, onCancel })
       } else {
         savedStaff = await staffApi.create(payload);
         success('Staff created', `${savedStaff.name} has been added to the system.`);
+      }
+      // Persist soft scheduling signals (best-effort; never blocks the save).
+      try {
+        await staffApi.updatePreferences(savedStaff.id, {
+          prefers_early: prefersEarly,
+          prefers_late: prefersLate,
+          buddy_staff_id: buddyId || null,
+        });
+      } catch {
+        toastError('Preferences not saved', 'Profile saved, but shift preferences could not be stored.');
       }
       onSave(savedStaff);
     } catch (err: unknown) {
@@ -242,6 +280,54 @@ export const StaffForm: React.FC<StaffFormProps> = ({ staff, onSave, onCancel })
             </select>
           </div>
         )}
+      </div>
+
+      {/* Scheduling preferences (UC-005 soft signals) */}
+      <div className="pt-3 border-t border-gray-100">
+        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
+          Scheduling Preferences <span className="normal-case font-normal text-gray-400">(soft signals for the ranking engine)</span>
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={prefersEarly}
+                onChange={(e) => setPrefersEarly(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              Early riser (prefers shifts starting before 12:00)
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={prefersLate}
+                onChange={(e) => setPrefersLate(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              Late shift preference (prefers shifts from 12:00 onwards)
+            </label>
+          </div>
+          <div className="form-group">
+            <label className="label">Preferred Working Partner (buddy)</label>
+            <select
+              value={buddyId}
+              onChange={(e) => setBuddyId(e.target.value)}
+              className="input"
+              disabled={!isEditing && buddyOptions.length === 0}
+            >
+              <option value="">No buddy preference</option>
+              {buddyOptions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} — {s.role}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 mt-1">
+              Honoured only when the buddy ranks in the top 3 of the opposite crew pool.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Actions */}

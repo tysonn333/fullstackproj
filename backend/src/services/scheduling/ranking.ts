@@ -317,9 +317,18 @@ export interface CrewPair {
   pair_distance_km: number | null;
   /** True when the pair was formed despite exceeding the proximity radius. */
   proximity_flag: boolean;
+  /** True when the pair was chosen because of a buddy preference. */
+  buddy_pair: boolean;
   /** Human-readable explanation of how the pair was chosen. */
   note: string;
 }
+
+/** staff_id → preferred partner's staff_id (from staff_preferences.buddy_staff_id). */
+export type BuddyMap = Map<number, number>;
+
+// A buddy preference is honoured only when the partner ranks within the top N
+// of the opposite pool (UC-005 A3 — soft signal, never forced).
+const BUDDY_TOP_N = 3;
 
 /**
  * Pairs a driver with an attendant (medic / EMT / paramedic) from two already
@@ -332,12 +341,18 @@ export interface CrewPair {
  *   • if no compatible combination exists, fall back to the highest combined
  *     score and raise a proximity flag.
  *
+ * Buddy preferences (UC-005 A3) are honoured as a soft signal: when a member
+ * of the top-3 of one pool names a buddy who sits in the top-3 of the other
+ * pool AND the two are proximity-compatible, that pair is chosen
+ * preferentially. Otherwise the preference is ignored (never forced).
+ *
  * Either pool may be empty — the corresponding side of the pair is returned as
  * null so the caller can raise a coverage_gap flag for that role.
  */
 export function pairCrew(
   rankedDrivers: RankedCandidate[],
-  rankedAttendants: RankedCandidate[]
+  rankedAttendants: RankedCandidate[],
+  buddies?: BuddyMap
 ): CrewPair {
   const drivers = [...rankedDrivers];
   const attendants = [...rankedAttendants];
@@ -351,6 +366,7 @@ export function pairCrew(
       pair_score: (driver?.score ?? 0) + (attendant?.score ?? 0),
       pair_distance_km: null,
       proximity_flag: false,
+      buddy_pair: false,
       note:
         drivers.length === 0 && attendants.length === 0
           ? 'No eligible driver or attendant'
@@ -358,6 +374,40 @@ export function pairCrew(
           ? 'No eligible driver'
           : 'No eligible attendant',
     };
+  }
+
+  // Buddy pass: best-scoring mutual/one-way buddy pair within the top 3 of
+  // each pool, if proximity-compatible.
+  if (buddies && buddies.size > 0) {
+    const topDrivers = drivers.slice(0, BUDDY_TOP_N);
+    const topAttendants = attendants.slice(0, BUDDY_TOP_N);
+    let bestBuddy: { driver: RankedCandidate; attendant: RankedCandidate; combined: number } | null = null;
+
+    for (const driver of topDrivers) {
+      for (const attendant of topAttendants) {
+        const isBuddyPair =
+          buddies.get(driver.staff_id) === attendant.staff_id ||
+          buddies.get(attendant.staff_id) === driver.staff_id;
+        if (!isBuddyPair) continue;
+        if (!isProximityCompatible(driver.home_postal, attendant.home_postal)) continue;
+        const combined = driver.score + attendant.score;
+        if (!bestBuddy || combined > bestBuddy.combined) {
+          bestBuddy = { driver, attendant, combined };
+        }
+      }
+    }
+
+    if (bestBuddy) {
+      return {
+        driver: bestBuddy.driver,
+        attendant: bestBuddy.attendant,
+        pair_score: bestBuddy.combined,
+        pair_distance_km: round2(distanceKm(bestBuddy.driver.home_postal, bestBuddy.attendant.home_postal)),
+        proximity_flag: false,
+        buddy_pair: true,
+        note: 'Buddy-preference pair (both in top 3, proximity-compatible)',
+      };
+    }
   }
 
   // First compatible pair, scanning drivers then attendants in ranked order.
@@ -370,6 +420,7 @@ export function pairCrew(
           pair_score: driver.score + attendant.score,
           pair_distance_km: round2(distanceKm(driver.home_postal, attendant.home_postal)),
           proximity_flag: false,
+          buddy_pair: false,
           note: 'Top proximity-compatible pair',
         };
       }
@@ -394,6 +445,7 @@ export function pairCrew(
     pair_score: chosen.combined,
     pair_distance_km: round2(distanceKm(chosen.driver.home_postal, chosen.attendant.home_postal)),
     proximity_flag: true,
+    buddy_pair: false,
     note: 'No proximity-compatible pair — assigned best-scoring pair with a proximity flag',
   };
 }
