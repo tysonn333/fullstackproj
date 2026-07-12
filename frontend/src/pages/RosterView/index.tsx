@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
 import { format, addDays, subDays, isWeekend, parseISO } from 'date-fns';
 import { rosterApi } from '../../api/roster';
 import { flagsApi } from '../../api/flags';
@@ -6,11 +7,12 @@ import { calendarApi } from '../../api/calendar';
 import { CrewGrid } from './CrewGrid';
 import { RosterTimeline } from './RosterTimeline';
 import { StaffDetail } from './StaffDetail';
+import { ImportJobsModal } from './ImportJobsModal';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useAuth } from '../../hooks/useAuth';
-import type { ShiftSlot, Staff, Flag, Roster } from '../../types';
+import type { ShiftSlot, Staff, Flag, Roster, JobType, StaffRole } from '../../types';
 
 // Singapore public holidays (simplified static list, incl. observed days —
 // extend each year; would come from an API in production)
@@ -41,6 +43,10 @@ export const RosterView: React.FC = () => {
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'timeline'>('list');
   const [exporting, setExporting] = useState(false);
+  const [showImportJobs, setShowImportJobs] = useState(false);
+  // UC-001 A4 — filters grey out non-matching rows instead of removing them.
+  const [serviceFilter, setServiceFilter] = useState<JobType | ''>('');
+  const [roleFilter, setRoleFilter] = useState<StaffRole | ''>('');
 
   const { error: toastError, success: toastSuccess } = useToast();
   const { confirm } = useConfirm();
@@ -75,23 +81,43 @@ export const RosterView: React.FC = () => {
     loadRoster(selectedDate);
   }, [selectedDate, loadRoster]);
 
-  const runGenerate = useCallback(async (force: boolean) => {
+  const runGenerate = useCallback(async (force: boolean, allowSkeleton = false) => {
     setGenerating(true);
     try {
-      const summary = await rosterApi.generate(selectedDate, force);
+      const summary = await rosterApi.generate(selectedDate, force, allowSkeleton);
       toastSuccess(
-        'Roster generated',
+        summary.skeleton ? 'Skeleton roster generated' : 'Roster generated',
         `${summary.assignments_made} of ${summary.slots_created} slots crewed` +
+          (summary.jobs_considered ? ` · ${summary.jobs_considered} job(s)` : '') +
+          (summary.weekend_or_holiday ? ' · weekend/PH baseline' : '') +
           (summary.flags_raised > 0 ? ` · ${summary.flags_raised} flag(s) raised` : '')
       );
       await loadRoster(selectedDate);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Generation failed';
+      // UC-002 A1: job list absent — offer the skeleton fallback.
+      const resp = axios.isAxiosError(err)
+        ? (err.response?.data as { error?: string; code?: string } | undefined)
+        : undefined;
+      if (resp?.code === 'NO_JOB_LIST') {
+        setGenerating(false);
+        confirm({
+          title: 'Job list not yet available',
+          message:
+            `No call-centre jobs are imported for ${format(parseISO(selectedDate), 'dd MMM yyyy')}. ` +
+            'Generation is normally deferred until the job list arrives. You can import jobs first ' +
+            '(Import Jobs button), or generate a skeleton roster from standard coverage now.',
+          confirmLabel: 'Generate skeleton',
+          variant: 'warning',
+          onConfirm: () => runGenerate(force, true),
+        });
+        return;
+      }
+      const msg = resp?.error ?? (err instanceof Error ? err.message : 'Generation failed');
       toastError('Generation failed', msg);
     } finally {
       setGenerating(false);
     }
-  }, [selectedDate, loadRoster, toastSuccess, toastError]);
+  }, [selectedDate, loadRoster, toastSuccess, toastError, confirm]);
 
   const handleGenerate = () => {
     if (roster) {
@@ -287,6 +313,19 @@ export const RosterView: React.FC = () => {
           )}
           {!isReadOnly && isAdmin && (
             <button
+              onClick={() => setShowImportJobs(true)}
+              className="btn-secondary btn-sm"
+              title="Import the call-centre job list (UC-002 input feed)"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Import Jobs
+            </button>
+          )}
+          {!isReadOnly && isAdmin && (
+            <button
               onClick={handleGenerate}
               className="btn-primary btn-sm"
               disabled={generating || loading}
@@ -386,6 +425,41 @@ export const RosterView: React.FC = () => {
               <span className="text-red-700">Exceptions: <strong>{activeFlags.length}</strong></span>
             </div>
           )}
+
+          {/* UC-001 A4 — filter by vehicle service type / role; non-matching
+              rows are greyed out, not removed, so the full picture remains. */}
+          <div className="ml-auto flex items-center gap-2">
+            <select
+              value={serviceFilter}
+              onChange={(e) => setServiceFilter(e.target.value as JobType | '')}
+              className="input text-xs py-1 w-32"
+              title="Filter by service type"
+            >
+              <option value="">All services</option>
+              <option value="MTS">MTS only</option>
+              <option value="EAS">EAS only</option>
+            </select>
+            <select
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value as StaffRole | '')}
+              className="input text-xs py-1 w-36"
+              title="Filter by crew role"
+            >
+              <option value="">All roles</option>
+              <option value="driver">Drivers only</option>
+              <option value="medic">Medics only</option>
+              <option value="emt">EMTs only</option>
+              <option value="paramedic">Paramedics only</option>
+            </select>
+            {(serviceFilter || roleFilter) && (
+              <button
+                onClick={() => { setServiceFilter(''); setRoleFilter(''); }}
+                className="btn-secondary btn-sm text-xs"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -423,6 +497,17 @@ export const RosterView: React.FC = () => {
           isWeekendOrHoliday={isWeekendOrHoliday}
           onStaffClick={setSelectedStaff}
           exceptionsPanel={exceptionsPanel}
+          serviceFilter={serviceFilter}
+          roleFilter={roleFilter}
+        />
+      )}
+
+      {/* UC-002 job feed import */}
+      {showImportJobs && (
+        <ImportJobsModal
+          date={selectedDate}
+          onClose={() => setShowImportJobs(false)}
+          onImported={() => loadRoster(selectedDate)}
         />
       )}
 

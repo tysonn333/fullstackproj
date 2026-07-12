@@ -30,6 +30,19 @@ The EFAR Ambulance Scheduling System replaces a manual, spreadsheet-based roster
 - Audit logging for all scheduling actions
 - Role-based access (Admin / Employee)
 
+### Use-case coverage (UC-001 → UC-008)
+
+| UC | What's implemented |
+|----|--------------------|
+| **UC-001** Roster view | Crew grid + timeline views, date navigation, weekend/PH banner, historical read-only mode, staff weekly-schedule drill-down, exceptions sidebar, and **A4 filters** (service type / role) that grey out non-matching rows |
+| **UC-002** Auto-generate | **Job-feed-driven generation**: call-centre CSV import (`POST /jobs/import` + Import Jobs UI), peak-concurrency demand → fleet size, **defer when no job list** (`NO_JOB_LIST` + skeleton fallback), **weekend/PH 2-ambulance baseline**, publish & lock |
+| **UC-003** Availability & leave | Leave request/approve/reject with duplicate-overlap blocking; availability form (full/half-day, date range); **approving half-day leave raises `half_day_gap` flags**; leave conflicting with a published roster raises **critical `coverage_gap` flags**; part-timer **WhatsApp webhook** with half-day gap detection (Chad) |
+| **UC-004** Filter (Guan Hee) | Five ordered filters with hard/soft semantics, real cert-expiry validation, per-candidate `filter_trace` |
+| **UC-005** Rank & assign (Guan Hee) | 6-component composite score (fairness/rest/proximity/cert-fit/preference/continuity), SG postal-district proximity, driver+attendant pairing with proximity walk-down, **buddy preference honoured within top-3** |
+| **UC-006** Last-minute change | Drop → ranked replacements → confirm swap; **absent-all-day batch drop** (every shift cancelled + flagged); filling a slot **auto-resolves** its gap flags |
+| **UC-007** Staff profiles | CRUD + certifications; **shift-time & buddy preferences UI**; **expiring-certs alert banner** (30-day window; expired certs are already excluded by UC-004 Filter 5) |
+| **UC-008** Exceptions | Severity-sorted panel, resolve/dismiss with audit trail, **bulk-action mode**, **CSV export**, `auto_resolved` status surfaced, **browser push-notification fallback** for new critical flags (Chad) |
+
 ### Scheduling engine highlights (UC-004 / UC-005 — Guan Hee)
 
 - **UC-004 filter pipeline** runs five ordered checks — availability → rest hours

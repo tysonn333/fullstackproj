@@ -10,6 +10,22 @@ const router = Router();
 router.use(authenticate);
 
 /**
+ * UC-008 A3 — auto-resolution: filling a slot resolves any open staffing-gap
+ * flags on it (coverage_gap / half_day_gap) without admin action. Returns the
+ * number of flags auto-resolved.
+ */
+async function autoResolveSlotFlags(slotId: number): Promise<number> {
+  const { data } = await supabaseAdmin
+    .from('flags')
+    .update({ status: 'auto_resolved', resolved_at: new Date().toISOString() })
+    .eq('slot_id', slotId)
+    .eq('status', 'active')
+    .in('flag_type', ['coverage_gap', 'half_day_gap'])
+    .select('flag_id');
+  return data?.length ?? 0;
+}
+
+/**
  * Helper: Fetch a slot with its roster date.
  */
 async function fetchSlotWithDate(slotId: number): Promise<{ slot: ShiftSlot; rosterDate: string } | null> {
@@ -188,6 +204,9 @@ router.post('/slots/:id/assign', requireAdmin, async (req: AuthenticatedRequest,
       result.slot.start_time,
       result.slot.end_time
     );
+
+    // Filling the slot auto-resolves its open staffing-gap flags (UC-008 A3).
+    await autoResolveSlotFlags(slotId);
 
     // Raise consecutive days flag if applicable
     if (candidate.consecutive_days_flag) {
@@ -422,9 +441,13 @@ router.post('/:id/reassign', requireAdmin, async (req: AuthenticatedRequest, res
       slotResult.slot.end_time
     );
 
+    // Re-crewing the slot auto-resolves its open staffing-gap flags (UC-008 A3).
+    const autoResolved = await autoResolveSlotFlags(slot_id);
+
     res.json({
       data: newAssignment,
       previous_assignment: currentAssignment ?? null,
+      flags_auto_resolved: autoResolved,
     });
   } catch (err) {
     next(err);

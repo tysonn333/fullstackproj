@@ -125,8 +125,11 @@ export const FlagCard: React.FC<FlagCardProps> = ({
               <span className={`badge text-xs ${config.badge}`}>{flag.severity}</span>
               <span className="badge-gray badge text-xs">{flagTypeLabels[flag.flag_type] || flag.flag_type}</span>
               {flag.status !== 'active' && (
-                <span className={`badge text-xs ${flag.status === 'resolved' ? 'badge-green' : 'badge-gray'}`}>
-                  {flag.status}
+                <span className={`badge text-xs ${
+                  flag.status === 'resolved' ? 'badge-green' :
+                  flag.status === 'auto_resolved' ? 'badge-blue' : 'badge-gray'
+                }`}>
+                  {flag.status === 'auto_resolved' ? 'auto-resolved' : flag.status}
                 </span>
               )}
             </div>
@@ -243,7 +246,7 @@ export const FlagCard: React.FC<FlagCardProps> = ({
           {/* Resolved info */}
           {flag.status !== 'active' && flag.resolved_at && (
             <div className="text-xs text-gray-500">
-              {flag.status === 'resolved' ? 'Resolved' : 'Dismissed'} on{' '}
+              {flag.status === 'resolved' ? 'Resolved' : flag.status === 'auto_resolved' ? 'Auto-resolved by the system' : 'Dismissed'} on{' '}
               {format(new Date(flag.resolved_at), 'dd MMM yyyy HH:mm')}
               {flag.resolution_reason && (
                 <p className="mt-1 italic">"{flag.resolution_reason}"</p>

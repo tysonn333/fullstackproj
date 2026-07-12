@@ -1,7 +1,7 @@
 import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
 import { authenticate, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
-import { generateRoster } from '../services/scheduling/generator';
+import { generateRoster, NoJobListError } from '../services/scheduling/generator';
 import { logAudit } from '../services/audit.service';
 import { notifyRosterPublished } from '../services/notification.service';
 import { buildICS, CalendarEvent } from '../lib/ics';
@@ -41,7 +41,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
  */
 router.post('/generate', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const { date, force } = req.body;
+    const { date, force, allow_skeleton } = req.body;
 
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       res.status(400).json({ error: 'date is required in YYYY-MM-DD format' });
@@ -52,10 +52,17 @@ router.post('/generate', requireAdmin, async (req: AuthenticatedRequest, res: Re
       rosterDate: date,
       actorId: req.user!.id,
       force: Boolean(force),
+      allowSkeleton: Boolean(allow_skeleton),
     });
 
     res.status(201).json({ data: result });
   } catch (err: unknown) {
+    // UC-002 A1 — job list absent: defer generation, tell the admin, and let
+    // the client retry with allow_skeleton=true for a standard-coverage roster.
+    if (err instanceof NoJobListError) {
+      res.status(409).json({ error: err.message, code: err.code });
+      return;
+    }
     if (err instanceof Error && err.message.includes('already exists')) {
       res.status(409).json({ error: err.message });
       return;

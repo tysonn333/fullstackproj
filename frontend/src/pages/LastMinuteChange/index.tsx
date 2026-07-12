@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { format, addDays } from 'date-fns';
 import { rosterApi } from '../../api/roster';
+import { staffApi } from '../../api/staff';
 import { CandidateList } from './CandidateList';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
@@ -109,6 +110,45 @@ export const LastMinuteChange: React.FC = () => {
           toastError('Could not load candidates');
         } finally {
           setLoadingCandidates(false);
+        }
+      },
+    });
+  };
+
+  // UC-006 A3 — staff absent for the ENTIRE day: batch-cancel all their
+  // assignments for the date; each affected slot becomes a flagged
+  // replacement event in the exceptions panel.
+  const handleAbsentAllDay = () => {
+    if (!selectedSlot) return;
+    const assignments = selectedSlot.assignments || [];
+    const staffToDrop = assignments[0];
+    if (!staffToDrop?.staff) {
+      toastError('No staff to mark absent', 'This slot has no assigned staff.');
+      return;
+    }
+    const staff = staffToDrop.staff;
+
+    confirm({
+      title: 'Absent for the entire day?',
+      message:
+        `Mark ${staff.name} as unavailable for ALL of ${selectedDate}? Every shift they are ` +
+        'assigned to that day will be dropped and flagged for replacement in the exceptions panel.',
+      confirmLabel: 'Mark Absent All Day',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const result = await staffApi.markUnavailable(staff.id, selectedDate, 'full-day absence (UC-006)');
+          success(
+            'Staff marked absent for the day',
+            `${result.assignments_cancelled} assignment(s) dropped · ${result.flags_raised} flag(s) raised. ` +
+              'Handle each replacement below or from the Exceptions panel.'
+          );
+          handleReset();
+        } catch (err) {
+          const backendError = axios.isAxiosError(err)
+            ? (err.response?.data as { error?: string } | undefined)?.error
+            : undefined;
+          toastError('Could not mark staff absent', backendError);
         }
       },
     });
@@ -310,9 +350,9 @@ export const LastMinuteChange: React.FC = () => {
                 )}
               </div>
 
-              {/* Drop button */}
+              {/* Drop buttons */}
               {step === 'select-slot' && selectedSlot && (
-                <div className="px-4 pb-4">
+                <div className="px-4 pb-4 space-y-2">
                   <button
                     onClick={handleFlagDrop}
                     className="btn-danger w-full"
@@ -322,6 +362,13 @@ export const LastMinuteChange: React.FC = () => {
                         d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
                     </svg>
                     Mark Staff as Unavailable & Find Replacement
+                  </button>
+                  <button
+                    onClick={handleAbsentAllDay}
+                    className="btn-secondary w-full text-red-700 border-red-200 hover:bg-red-50"
+                    title="UC-006 A3 — batch-drop every shift this staff member has today"
+                  >
+                    Staff Absent All Day (drop every shift &amp; flag for replacement)
                   </button>
                 </div>
               )}

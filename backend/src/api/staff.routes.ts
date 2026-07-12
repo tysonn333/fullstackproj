@@ -4,6 +4,7 @@ import { authenticate, requireAdmin, AuthenticatedRequest } from '../middleware/
 import { logAudit } from '../services/audit.service';
 import { buildICS, CalendarEvent } from '../lib/ics';
 import { isOvernight } from '../services/scheduling/filter';
+import { getAssignmentsOnDate, raiseFullDayConflictFlags } from '../services/coverage.service';
 
 const router = Router();
 router.use(authenticate);
@@ -31,6 +32,58 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
     if (error) throw error;
 
     res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/v1/staff/expiring-certs?days=30  (UC-007 A1)
+ * Certifications expiring within the window (default 30 days) or already
+ * expired, for active staff — drives the Staff Management alert banner.
+ * NOTE: registered before /:id so 'expiring-certs' is not read as an id.
+ */
+router.get('/expiring-certs', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const days = Math.max(1, Math.min(365, parseInt((req.query.days as string) ?? '30', 10) || 30));
+    const today = new Date().toISOString().split('T')[0];
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() + days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+
+    const { data, error } = await supabaseAdmin
+      .from('staff_certifications')
+      .select('cert_id, staff_id, cert_name, expiry_date, staff!inner(full_name, role, status)')
+      .not('expiry_date', 'is', null)
+      .lte('expiry_date', cutoffStr)
+      .eq('staff.status', 'active')
+      .order('expiry_date', { ascending: true });
+
+    if (error) throw error;
+
+    type Row = {
+      cert_id: number;
+      staff_id: number;
+      cert_name: string;
+      expiry_date: string;
+      staff: { full_name: string; role: string };
+    };
+
+    const rows = ((data ?? []) as unknown as Row[]).map((r) => ({
+      cert_id: r.cert_id,
+      staff_id: r.staff_id,
+      staff_name: r.staff.full_name,
+      staff_role: r.staff.role,
+      cert_name: r.cert_name,
+      expiry_date: r.expiry_date,
+      expired: r.expiry_date < today,
+      days_to_expiry: Math.ceil(
+        (new Date(`${r.expiry_date}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) /
+          86_400_000
+      ),
+    }));
+
+    res.json({ data: rows, total: rows.length, window_days: days });
   } catch (err) {
     next(err);
   }
@@ -387,6 +440,189 @@ function getDatePlusDays(dateStr: string, days: number): string {
   d.setDate(d.getDate() + days);
   return d.toISOString().split('T')[0];
 }
+
+/**
+ * POST /api/v1/staff/:id/mark-unavailable  (admin only — UC-006 A3)
+ * Staff member is absent for the ENTIRE day (MC, no-show, emergency):
+ *   1. availability for the date is set to unavailable;
+ *   2. a coverage_gap flag is raised for every slot they were crewing
+ *      (critical on published rosters);
+ *   3. all their assignments that day are cancelled, so each affected slot
+ *      becomes a separate replacement event batched in the exceptions panel.
+ * Body: { date: "YYYY-MM-DD", reason?: string }
+ */
+router.post('/:id/mark-unavailable', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const staffId = parseInt(req.params.id, 10);
+    const { date, reason } = req.body;
+
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.status(400).json({ error: 'date is required in YYYY-MM-DD format' });
+      return;
+    }
+
+    const { data: staff } = await supabaseAdmin
+      .from('staff')
+      .select('staff_id, full_name')
+      .eq('staff_id', staffId)
+      .single();
+
+    if (!staff) {
+      res.status(404).json({ error: 'Staff not found' });
+      return;
+    }
+
+    // 1. Block the day in the availability calendar.
+    await supabaseAdmin.from('availability').upsert(
+      {
+        staff_id: staffId,
+        work_date: date,
+        is_available: false,
+        half_day: null,
+        source: 'app',
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: 'staff_id,work_date' }
+    );
+
+    // 2. Flag every slot they were crewing BEFORE cancelling (the flag helper
+    //    reads non-cancelled assignments).
+    const affected = await getAssignmentsOnDate(staffId, date);
+    const flagsRaised = await raiseFullDayConflictFlags(
+      staffId,
+      staff.full_name,
+      [date],
+      reason ? `full-day absence (${reason})` : 'full-day absence'
+    );
+
+    // 3. Cancel the assignments so each slot shows as needing a replacement.
+    if (affected.length > 0) {
+      await supabaseAdmin
+        .from('assignments')
+        .update({ status: 'cancelled' })
+        .in('assignment_id', affected.map((a) => a.assignment_id));
+    }
+
+    await logAudit({
+      entity_type: 'staff',
+      entity_id: staffId,
+      action: 'mark_unavailable',
+      actor_id: req.user!.id,
+      details: {
+        date,
+        reason: reason ?? '',
+        assignments_cancelled: affected.map((a) => a.assignment_id),
+        flags_raised: flagsRaised,
+      },
+    });
+
+    res.json({
+      staff_id: staffId,
+      date,
+      assignments_cancelled: affected.length,
+      flags_raised: flagsRaised,
+      affected_slots: affected.map((a) => ({
+        slot_id: a.slot_id,
+        start_time: a.start_time,
+        end_time: a.end_time,
+        service_type: a.service_type,
+        crew_position: a.crew_position,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/v1/staff/:id/preferences  (UC-007 — soft signals for UC-005)
+ * Returns the staff member's shift-time and buddy preferences.
+ */
+router.get('/:id/preferences', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const staffId = parseInt(req.params.id, 10);
+
+    const { data } = await supabaseAdmin
+      .from('staff_preferences')
+      .select('staff_id, prefers_early, prefers_late, buddy_staff_id')
+      .eq('staff_id', staffId)
+      .single();
+
+    res.json({
+      data: data ?? {
+        staff_id: staffId,
+        prefers_early: false,
+        prefers_late: false,
+        buddy_staff_id: null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * PUT /api/v1/staff/:id/preferences  (admin only — UC-007 main flow steps 5–6)
+ * Body: { prefers_early?, prefers_late?, buddy_staff_id? }
+ */
+router.put('/:id/preferences', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const staffId = parseInt(req.params.id, 10);
+    const { prefers_early, prefers_late } = req.body;
+    const buddyRaw = req.body.buddy_staff_id;
+    const buddy_staff_id =
+      buddyRaw === null || buddyRaw === undefined || buddyRaw === '' ? null : Number(buddyRaw);
+
+    if (buddy_staff_id != null) {
+      if (!Number.isInteger(buddy_staff_id) || buddy_staff_id <= 0) {
+        res.status(400).json({ error: 'buddy_staff_id must be a positive integer or null' });
+        return;
+      }
+      if (buddy_staff_id === staffId) {
+        res.status(400).json({ error: 'A staff member cannot be their own buddy' });
+        return;
+      }
+      const { data: buddy } = await supabaseAdmin
+        .from('staff')
+        .select('staff_id, status')
+        .eq('staff_id', buddy_staff_id)
+        .single();
+      if (!buddy) {
+        res.status(404).json({ error: `Buddy staff member ${buddy_staff_id} not found` });
+        return;
+      }
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('staff_preferences')
+      .upsert(
+        {
+          staff_id: staffId,
+          prefers_early: Boolean(prefers_early),
+          prefers_late: Boolean(prefers_late),
+          buddy_staff_id,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'staff_id' }
+      )
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    await logAudit({
+      entity_type: 'staff_preferences',
+      entity_id: staffId,
+      action: 'update',
+      actor_id: req.user!.id,
+      details: { prefers_early, prefers_late, buddy_staff_id },
+    });
+
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * GET /api/v1/staff/:id/schedule.ics

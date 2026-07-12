@@ -214,6 +214,11 @@ export interface GenerationSummary {
   slots_created: number;
   assignments_made: number;
   flags_raised: number;
+  pairs_formed?: number;
+  jobs_considered?: number;
+  ambulances_rostered?: number;
+  skeleton?: boolean;
+  weekend_or_holiday?: boolean;
   errors: string[];
 }
 
@@ -229,10 +234,10 @@ export const rosterApi = {
    * best crew to each slot, and raises flags for any gaps. Pass force=true to
    * regenerate over an existing draft (wipes its slots/assignments/flags first).
    */
-  generate: async (date: string, force = false): Promise<GenerationSummary> => {
+  generate: async (date: string, force = false, allowSkeleton = false): Promise<GenerationSummary> => {
     const { data } = await apiClient.post<{ data: GenerationSummary }>(
       '/api/v1/roster/generate',
-      { date, force }
+      { date, force, allow_skeleton: allowSkeleton }
     );
     return data.data;
   },

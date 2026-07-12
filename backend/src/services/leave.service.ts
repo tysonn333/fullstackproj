@@ -1,6 +1,11 @@
 import supabaseAdmin from '../lib/supabase';
 import { logAudit } from './audit.service';
 import { sendNotification } from './notification.service';
+import {
+  raiseHalfDayGapFlags,
+  raiseFullDayConflictFlags,
+  datesBetween,
+} from './coverage.service';
 
 export interface LeaveRequest {
   leave_id: number;
@@ -94,10 +99,10 @@ export async function approveLeave(
   leaveId: number,
   approvedBy: string,
   notes?: string
-): Promise<{ leave: LeaveRequest; conflicts: number[] }> {
+): Promise<{ leave: LeaveRequest; conflicts: number[]; flags_raised: number }> {
   const { data: leave, error: fetchErr } = await supabaseAdmin
     .from('leave_requests')
-    .select('*')
+    .select('*, staff(full_name)')
     .eq('leave_id', leaveId)
     .single();
 
@@ -146,6 +151,36 @@ export async function approveLeave(
     throw new Error(`Failed to approve leave: ${updateErr?.message}`);
   }
 
+  // UC-003 step 8 + E1: surface the coverage impact in the exceptions panel.
+  //   • half-day leave → half_day_gap flag per assigned slot overlapping the
+  //     blocked half (a part-timer is needed for the uncovered half);
+  //   • full-day leave → coverage_gap flag per conflicting assignment
+  //     (critical when the roster is already published).
+  const staffName =
+    (leave as { staff?: { full_name?: string } }).staff?.full_name ?? `Staff ${leave.staff_id}`;
+  const leaveDates = datesBetween(leave.start_date, leave.end_date);
+  let flagsRaised = 0;
+
+  if (leave.leave_type === 'half_am' || leave.leave_type === 'half_pm') {
+    const blockedHalf = leave.leave_type === 'half_am' ? 'am' : 'pm';
+    for (const date of leaveDates) {
+      flagsRaised += await raiseHalfDayGapFlags(
+        leave.staff_id,
+        staffName,
+        date,
+        blockedHalf,
+        'approved half-day leave'
+      );
+    }
+  } else {
+    flagsRaised += await raiseFullDayConflictFlags(
+      leave.staff_id,
+      staffName,
+      leaveDates,
+      'approved leave'
+    );
+  }
+
   await logAudit({
     entity_type: 'leave_requests',
     entity_id: leaveId,
@@ -155,6 +190,7 @@ export async function approveLeave(
       leave_id: leaveId,
       staff_id: leave.staff_id,
       conflict_assignments: conflictAssignmentIds,
+      flags_raised: flagsRaised,
       notes: notes ?? '',
     },
   });
@@ -166,7 +202,7 @@ export async function approveLeave(
     data: { leave_id: leaveId },
   });
 
-  return { leave: updated as LeaveRequest, conflicts: conflictAssignmentIds };
+  return { leave: updated as LeaveRequest, conflicts: conflictAssignmentIds, flags_raised: flagsRaised };
 }
 
 /**

@@ -448,6 +448,81 @@ describe('pairCrew()', () => {
   });
 });
 
+// ── pairCrew() buddy preference (UC-005 A3) ───────────────────────────────────
+
+describe('pairCrew() — buddy preference', () => {
+  const buddies = new Map<number, number>();
+
+  beforeEach(() => buddies.clear());
+
+  it('prefers a buddy pair over a higher-scoring non-buddy pair when both are in the top 3', () => {
+    buddies.set(11, 2); // driver 11 prefers attendant 2
+
+    const drivers = [
+      makeRanked({ staff_id: 10, role: 'driver', score: 95, home_postal: '310450' }),
+      makeRanked({ staff_id: 11, role: 'driver', score: 90, home_postal: '310450' }),
+    ];
+    const attendants = [
+      makeRanked({ staff_id: 1, role: 'medic', score: 85, home_postal: '310123' }),
+      makeRanked({ staff_id: 2, role: 'medic', score: 80, home_postal: '310123' }),
+    ];
+
+    const pair = pairCrew(drivers, attendants, buddies);
+    expect(pair.buddy_pair).toBe(true);
+    expect(pair.driver?.staff_id).toBe(11);
+    expect(pair.attendant?.staff_id).toBe(2);
+  });
+
+  it('honours a buddy preference declared by the attendant side too', () => {
+    buddies.set(1, 10); // attendant 1 prefers driver 10
+
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90, home_postal: '310450' })];
+    const attendants = [
+      makeRanked({ staff_id: 2, role: 'medic', score: 88, home_postal: '310123' }),
+      makeRanked({ staff_id: 1, role: 'medic', score: 80, home_postal: '310123' }),
+    ];
+
+    const pair = pairCrew(drivers, attendants, buddies);
+    expect(pair.buddy_pair).toBe(true);
+    expect(pair.attendant?.staff_id).toBe(1);
+  });
+
+  it('ignores the buddy preference when the buddy is ranked outside the top 3', () => {
+    buddies.set(10, 4); // buddy is the 4th-ranked attendant
+
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90, home_postal: '310450' })];
+    const attendants = [1, 2, 3, 4].map((id) =>
+      makeRanked({ staff_id: id, role: 'medic', score: 90 - id, home_postal: '310123' })
+    );
+
+    const pair = pairCrew(drivers, attendants, buddies);
+    expect(pair.buddy_pair).toBe(false);
+    expect(pair.attendant?.staff_id).toBe(1); // normal top-ranked pairing
+  });
+
+  it('ignores the buddy preference when the buddies are not proximity-compatible', () => {
+    buddies.set(10, 2);
+
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90, home_postal: '640210' })]; // Jurong
+    const attendants = [
+      makeRanked({ staff_id: 1, role: 'medic', score: 85, home_postal: '640455' }), // Jurong — compatible
+      makeRanked({ staff_id: 2, role: 'medic', score: 80, home_postal: '509000' }), // Changi — the buddy, too far
+    ];
+
+    const pair = pairCrew(drivers, attendants, buddies);
+    expect(pair.buddy_pair).toBe(false);
+    expect(pair.attendant?.staff_id).toBe(1);
+  });
+
+  it('pairs normally when no buddy map is provided', () => {
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90, home_postal: '310450' })];
+    const attendants = [makeRanked({ staff_id: 1, role: 'medic', score: 80, home_postal: '310123' })];
+    const pair = pairCrew(drivers, attendants);
+    expect(pair.buddy_pair).toBe(false);
+    expect(pair.driver?.staff_id).toBe(10);
+  });
+});
+
 // ── Edge Case Tests ───────────────────────────────────────────────────────────
 
 describe('Ranking edge cases', () => {
