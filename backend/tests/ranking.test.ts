@@ -1,8 +1,15 @@
 /**
- * Tests for UC-005 Ranking / Scoring Engine
+ * Tests for UC-005 Ranking / Scoring & Pairing Engine
  */
 
-import { rankCandidates, scoreCandidate, RankedCandidate } from '../src/services/scheduling/ranking';
+import {
+  rankCandidates,
+  scoreCandidate,
+  pairCrew,
+  certFitScore,
+  WEIGHTS,
+  RankedCandidate,
+} from '../src/services/scheduling/ranking';
 import { FilterResult, ShiftSlot } from '../src/services/scheduling/filter';
 
 // ── Mock Supabase ─────────────────────────────────────────────────────────────
@@ -58,15 +65,37 @@ const nightSlot: ShiftSlot = {
   end_time: '06:00:00',
 };
 
+const easSlot: ShiftSlot = {
+  ...daySlot,
+  slot_id: 3,
+  service_type: 'EAS',
+  crew_position: 'driver',
+};
+
 function makeEligibleCandidate(overrides: Partial<FilterResult> = {}): FilterResult {
   return {
     staff_id: 1,
     full_name: 'Alice Tan',
     role: 'medic',
+    employment_type: 'full_time',
+    home_postal: '310450',
     eligible: true,
     hard_blocked: false,
     consecutive_days_flag: false,
     consecutive_days_count: 0,
+    filter_trace: [],
+    ...overrides,
+  };
+}
+
+function makeRanked(overrides: Partial<RankedCandidate> = {}): RankedCandidate {
+  return {
+    ...makeEligibleCandidate(),
+    score: 50,
+    score_breakdown: { fairness: 1, rest: 1, proximity: 1, cert_fit: 1, preference: 0.5, continuity: 1 },
+    late_shift_count: 0,
+    rest_hours: 24,
+    proximity_km: 5,
     ...overrides,
   };
 }
@@ -85,28 +114,34 @@ describe('scoreCandidate()', () => {
     expect(result.score).toBeLessThanOrEqual(100);
   });
 
-  it('returns score breakdown with 4 components summing to the total (within rounding)', async () => {
+  it('returns a 6-component breakdown that reconstructs the total (within rounding)', async () => {
     const result = await scoreCandidate(makeEligibleCandidate(), daySlot, rosterDate, month);
-    const { fairness, rest, preference, continuity } = result.score_breakdown;
-    const reconstructed = (fairness * 0.3 + rest * 0.3 + preference * 0.2 + continuity * 0.2) * 100;
-    expect(Math.abs(result.score - Math.round(reconstructed * 100) / 100)).toBeLessThanOrEqual(0.02);
+    const b = result.score_breakdown;
+    const reconstructed =
+      (WEIGHTS.fairness * b.fairness +
+        WEIGHTS.rest * b.rest +
+        WEIGHTS.proximity * b.proximity +
+        WEIGHTS.cert_fit * b.cert_fit +
+        WEIGHTS.preference * b.preference +
+        WEIGHTS.continuity * b.continuity) *
+      100;
+    // Each of the 6 breakdown components is rounded to 2 dp independently, so
+    // the reconstructed total can drift by up to ~0.5 from the score computed
+    // off the raw values.
+    expect(Math.abs(result.score - Math.round(reconstructed * 100) / 100)).toBeLessThanOrEqual(0.5);
   });
 
-  it('gives maximum score to a staff with no prior shifts (fully rested, no late shifts)', async () => {
+  it('gives full fairness and rest to a staff with no prior shifts', async () => {
     mockAssignmentRows = [];
     const result = await scoreCandidate(makeEligibleCandidate(), daySlot, rosterDate, month);
 
-    // rest_hours = 24 → rest score = 1.0
     expect(result.rest_hours).toBe(24);
     expect(result.score_breakdown.rest).toBe(1.0);
-
-    // late_shift_count = 0 → fairness score = 1.0
     expect(result.late_shift_count).toBe(0);
     expect(result.score_breakdown.fairness).toBe(1.0);
   });
 
   it('reduces fairness score as late shift count increases', async () => {
-    // Simulate 10 late shifts this month
     const lateShifts = Array.from({ length: 10 }, (_, i) => ({
       shift_slots: {
         start_time: '18:00:00',
@@ -118,30 +153,27 @@ describe('scoreCandidate()', () => {
     mockAssignmentRows = lateShifts;
     const result = await scoreCandidate(makeEligibleCandidate(), daySlot, rosterDate, month);
 
-    // 10 late shifts → fairness raw = 1 - (10/20) = 0.5
     expect(result.late_shift_count).toBe(10);
     expect(result.score_breakdown.fairness).toBeCloseTo(0.5, 2);
   });
 
   it('caps rest_hours at 24', async () => {
-    // Last shift ended 72 hours ago (way more than 24h)
     mockAssignmentRows = [
       {
         shift_slots: {
           end_time: '06:00:00',
           start_time: '18:00:00',
-          rosters: { roster_date: '2025-06-12' }, // 3 days before
+          rosters: { roster_date: '2025-06-12' },
         },
       },
     ];
 
     const result = await scoreCandidate(makeEligibleCandidate(), daySlot, rosterDate, month);
-    expect(result.rest_hours).toBe(24); // capped at 24
+    expect(result.rest_hours).toBe(24);
     expect(result.score_breakdown.rest).toBe(1.0);
   });
 
   it('computes correct rest hours (exactly 12h since last shift)', async () => {
-    // Last shift ended at 18:00 on 2025-06-14; new slot starts at 06:00 on 2025-06-15 = 12h
     mockAssignmentRows = [
       {
         shift_slots: {
@@ -154,7 +186,7 @@ describe('scoreCandidate()', () => {
 
     const result = await scoreCandidate(makeEligibleCandidate(), daySlot, rosterDate, month);
     expect(result.rest_hours).toBeCloseTo(12, 1);
-    expect(result.score_breakdown.rest).toBeCloseTo(0.5, 2); // 12/24 = 0.5
+    expect(result.score_breakdown.rest).toBeCloseTo(0.5, 2);
   });
 
   it('scores continuity as 1.0 when no same-day assignments exist', async () => {
@@ -164,7 +196,6 @@ describe('scoreCandidate()', () => {
   });
 
   it('scores continuity as 0.0 when an overlapping same-day assignment exists', async () => {
-    // Same date, overlapping time
     mockAssignmentRows = [
       {
         shift_slots: {
@@ -176,7 +207,6 @@ describe('scoreCandidate()', () => {
       },
     ];
 
-    // daySlot is 06:00–18:00, which overlaps with 10:00–14:00
     const result = await scoreCandidate(makeEligibleCandidate(), daySlot, rosterDate, month);
     expect(result.score_breakdown.continuity).toBe(0.0);
   });
@@ -185,6 +215,70 @@ describe('scoreCandidate()', () => {
     mockPreferenceRow = null;
     const result = await scoreCandidate(makeEligibleCandidate(), daySlot, rosterDate, month);
     expect(result.score_breakdown.preference).toBe(0.5);
+  });
+
+  it('scores proximity higher for a staff living near the station than one far away', async () => {
+    const near = await scoreCandidate(
+      makeEligibleCandidate({ staff_id: 1, home_postal: '169608' }), // same district as station
+      daySlot,
+      rosterDate,
+      month
+    );
+    const far = await scoreCandidate(
+      makeEligibleCandidate({ staff_id: 2, home_postal: '730000' }), // far NW (Woodlands, district 25)
+      daySlot,
+      rosterDate,
+      month
+    );
+    expect(near.score_breakdown.proximity).toBeGreaterThan(far.score_breakdown.proximity);
+  });
+
+  it('reports proximity_km for the candidate', async () => {
+    const result = await scoreCandidate(
+      makeEligibleCandidate({ home_postal: '169608' }),
+      daySlot,
+      rosterDate,
+      month
+    );
+    expect(typeof result.proximity_km).toBe('number');
+    expect(result.proximity_km).toBeLessThan(5); // same district as station
+  });
+
+  it('assigns a neutral proximity score of 0.5 when home_postal is missing', async () => {
+    const result = await scoreCandidate(
+      makeEligibleCandidate({ home_postal: null }),
+      daySlot,
+      rosterDate,
+      month
+    );
+    expect(result.score_breakdown.proximity).toBe(0.5);
+  });
+});
+
+// ── certFitScore() Tests ──────────────────────────────────────────────────────
+
+describe('certFitScore()', () => {
+  it('gives exact-fit medics/EMTs a higher MTS score than over-qualified drivers/paramedics', () => {
+    expect(certFitScore('medic', 'MTS')).toBe(1.0);
+    expect(certFitScore('emt', 'MTS')).toBe(1.0);
+    expect(certFitScore('driver', 'MTS')).toBeLessThan(1.0);
+    expect(certFitScore('paramedic', 'MTS')).toBeLessThan(1.0);
+  });
+
+  it('gives every EAS-capable role a full cert-fit score on EAS slots', () => {
+    expect(certFitScore('driver', 'EAS')).toBe(1.0);
+    expect(certFitScore('paramedic', 'EAS')).toBe(1.0);
+  });
+
+  it('makes an exact-fit medic outrank an over-qualified paramedic on an MTS slot (all else equal)', async () => {
+    mockAssignmentRows = [];
+    mockPreferenceRow = null;
+    const candidates: FilterResult[] = [
+      makeEligibleCandidate({ staff_id: 1, role: 'paramedic', home_postal: '310450' }),
+      makeEligibleCandidate({ staff_id: 2, role: 'medic', home_postal: '310450' }),
+    ];
+    const ranked = await rankCandidates(candidates, daySlot, rosterDate);
+    expect(ranked[0].staff_id).toBe(2); // medic (exact fit) ranks first
   });
 });
 
@@ -212,61 +306,39 @@ describe('rankCandidates()', () => {
     expect(result[0].staff_id).toBe(1);
   });
 
-  it('returns candidates sorted by score descending', async () => {
-    // Give staff 2 zero late shifts; give staff 1 many late shifts → staff 2 should rank higher
+  it('breaks ties by staff_id ascending when all else is equal', async () => {
     mockAssignmentRows = [];
 
     const candidates: FilterResult[] = [
-      makeEligibleCandidate({ staff_id: 1, full_name: 'Alice' }),
-      makeEligibleCandidate({ staff_id: 2, full_name: 'Bob' }),
+      makeEligibleCandidate({ staff_id: 3, full_name: 'Charlie', home_postal: '310450' }),
+      makeEligibleCandidate({ staff_id: 1, full_name: 'Alice', home_postal: '310450' }),
+      makeEligibleCandidate({ staff_id: 2, full_name: 'Bob', home_postal: '310450' }),
     ];
 
     const result = await rankCandidates(candidates, daySlot, rosterDate);
-
-    // Both have same conditions since mock returns same data;
-    // tie-breaker by staff_id ascending — staff 1 should come first
-    expect(result[0].staff_id).toBe(1);
-    expect(result[1].staff_id).toBe(2);
+    expect(result.map((r) => r.staff_id)).toEqual([1, 2, 3]);
   });
 
-  it('applies tie-breaker: fewer late shifts first', async () => {
-    // We need to simulate different late-shift counts per staff member.
-    // The mock returns the same data for all calls, so we test the tie-break
-    // logic indirectly via staff_id alphabetical when all scores are equal.
-
-    const candidates: FilterResult[] = [
-      makeEligibleCandidate({ staff_id: 3, full_name: 'Charlie' }),
-      makeEligibleCandidate({ staff_id: 1, full_name: 'Alice' }),
-      makeEligibleCandidate({ staff_id: 2, full_name: 'Bob' }),
-    ];
-
-    const result = await rankCandidates(candidates, daySlot, rosterDate);
-
-    // All have same score with this mock; tie-breaker 3 is staff_id ascending
-    const ids = result.map((r) => r.staff_id);
-    expect(ids).toEqual([1, 2, 3]);
-  });
-
-  it('each ranked candidate includes score and score_breakdown', async () => {
+  it('each ranked candidate includes score and a 6-component breakdown', async () => {
     const candidates = [makeEligibleCandidate({ staff_id: 1 })];
     const result = await rankCandidates(candidates, daySlot, rosterDate);
 
     expect(result[0]).toHaveProperty('score');
-    expect(result[0]).toHaveProperty('score_breakdown');
     expect(result[0].score_breakdown).toHaveProperty('fairness');
     expect(result[0].score_breakdown).toHaveProperty('rest');
+    expect(result[0].score_breakdown).toHaveProperty('proximity');
+    expect(result[0].score_breakdown).toHaveProperty('cert_fit');
     expect(result[0].score_breakdown).toHaveProperty('preference');
     expect(result[0].score_breakdown).toHaveProperty('continuity');
   });
 
-  it('includes late_shift_count and rest_hours in the ranked result', async () => {
+  it('includes late_shift_count, rest_hours and proximity_km in the ranked result', async () => {
     const candidates = [makeEligibleCandidate({ staff_id: 1 })];
     const result = await rankCandidates(candidates, daySlot, rosterDate);
 
-    expect(result[0]).toHaveProperty('late_shift_count');
-    expect(result[0]).toHaveProperty('rest_hours');
     expect(typeof result[0].late_shift_count).toBe('number');
     expect(typeof result[0].rest_hours).toBe('number');
+    expect(typeof result[0].proximity_km).toBe('number');
   });
 
   it('handles a large candidate pool (20 candidates) without errors', async () => {
@@ -288,7 +360,7 @@ describe('rankCandidates()', () => {
     });
 
     const result = await rankCandidates([candidate], daySlot, rosterDate);
-    const ranked = result[0] as RankedCandidate;
+    const ranked = result[0];
 
     expect(ranked.staff_id).toBe(42);
     expect(ranked.full_name).toBe('Test User');
@@ -297,13 +369,82 @@ describe('rankCandidates()', () => {
     expect(ranked.consecutive_days_count).toBe(7);
   });
 
-  it('night slot (start_time 18:00) is treated correctly for late shift counting', async () => {
+  it('night slot is handled without error', async () => {
     const candidates = [makeEligibleCandidate({ staff_id: 1 })];
-
-    // For the night slot itself, late_shift_count is historical — from prior shifts
     const result = await rankCandidates(candidates, nightSlot, rosterDate);
     expect(result).toHaveLength(1);
     expect(result[0].score).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ── pairCrew() Tests ──────────────────────────────────────────────────────────
+
+describe('pairCrew()', () => {
+  it('pairs the top-ranked driver and attendant when they are proximity compatible', () => {
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90, home_postal: '310450' })];
+    const attendants = [makeRanked({ staff_id: 1, role: 'medic', score: 80, home_postal: '310123' })];
+
+    const pair = pairCrew(drivers, attendants);
+    expect(pair.driver?.staff_id).toBe(10);
+    expect(pair.attendant?.staff_id).toBe(1);
+    expect(pair.proximity_flag).toBe(false);
+    expect(pair.pair_score).toBe(170);
+  });
+
+  it('skips to the next attendant when the top pair is not proximity compatible', () => {
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90, home_postal: '640210' })]; // Jurong (district 22, west)
+    const attendants = [
+      makeRanked({ staff_id: 1, role: 'medic', score: 80, home_postal: '509000' }), // Changi (district 17, far east) — incompatible
+      makeRanked({ staff_id: 2, role: 'medic', score: 70, home_postal: '640455' }), // Jurong (same district) — compatible
+    ];
+
+    const pair = pairCrew(drivers, attendants);
+    expect(pair.driver?.staff_id).toBe(10);
+    expect(pair.attendant?.staff_id).toBe(2);
+    expect(pair.proximity_flag).toBe(false);
+  });
+
+  it('falls back to the best-scoring pair and flags it when nothing is compatible', () => {
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90, home_postal: '640210' })]; // Jurong (west)
+    const attendants = [
+      makeRanked({ staff_id: 1, role: 'medic', score: 80, home_postal: '509000' }), // Changi (far east)
+      makeRanked({ staff_id: 2, role: 'medic', score: 60, home_postal: '508000' }), // Changi (far east)
+    ];
+
+    const pair = pairCrew(drivers, attendants);
+    expect(pair.proximity_flag).toBe(true);
+    expect(pair.driver?.staff_id).toBe(10);
+    expect(pair.attendant?.staff_id).toBe(1); // higher combined score
+  });
+
+  it('returns a null driver and a note when the driver pool is empty', () => {
+    const attendants = [makeRanked({ staff_id: 1, role: 'medic', score: 80 })];
+    const pair = pairCrew([], attendants);
+    expect(pair.driver).toBeNull();
+    expect(pair.attendant?.staff_id).toBe(1);
+    expect(pair.note).toContain('driver');
+  });
+
+  it('returns a null attendant and a note when the attendant pool is empty', () => {
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90 })];
+    const pair = pairCrew(drivers, []);
+    expect(pair.attendant).toBeNull();
+    expect(pair.driver?.staff_id).toBe(10);
+    expect(pair.note).toContain('attendant');
+  });
+
+  it('returns both null when both pools are empty', () => {
+    const pair = pairCrew([], []);
+    expect(pair.driver).toBeNull();
+    expect(pair.attendant).toBeNull();
+    expect(pair.pair_score).toBe(0);
+  });
+
+  it('treats unknown postal codes as compatible', () => {
+    const drivers = [makeRanked({ staff_id: 10, role: 'driver', score: 90, home_postal: null })];
+    const attendants = [makeRanked({ staff_id: 1, role: 'medic', score: 80, home_postal: null })];
+    const pair = pairCrew(drivers, attendants);
+    expect(pair.proximity_flag).toBe(false);
   });
 });
 
@@ -320,13 +461,16 @@ describe('Ranking edge cases', () => {
       staff_id: 99,
       full_name: 'Edge Case',
       role: 'driver',
+      employment_type: 'full_time',
+      home_postal: null,
       eligible: true,
       hard_blocked: false,
       consecutive_days_flag: false,
       consecutive_days_count: 0,
+      filter_trace: [],
     };
 
-    await expect(scoreCandidate(candidate, daySlot, rosterDate, month)).resolves.toBeDefined();
+    await expect(scoreCandidate(candidate, easSlot, rosterDate, month)).resolves.toBeDefined();
   });
 
   it('scores are deterministic for the same inputs', async () => {

@@ -1,12 +1,17 @@
 /**
- * UC-004 Filter Pipeline
+ * UC-004 Filter Pipeline (Guan Hee)
  *
  * Filters staff eligibility for a given shift slot in strict order:
  *   1. Availability check      — hard block (leave / MC / unavailable)
  *   2. Rest hours check        — hard block (< 12 h since last shift end)
  *   3. Daily hours check       — hard block (> 12 h already scheduled that day)
  *   4. Consecutive days check  — SOFT FLAG only (>= 7 consecutive days)
- *   5. Certification match     — hard block based on service_type
+ *   5. Certification match     — hard block: role hierarchy AND a valid,
+ *                                unexpired certification for the service type
+ *
+ * Every candidate carries a `filter_trace` recording the outcome of each step
+ * it reached, so the reason a candidate was kept or dropped is fully
+ * transparent to the caller (roster generator, reassignment UI, tests).
  */
 
 import supabaseAdmin from '../../lib/supabase';
@@ -14,6 +19,21 @@ import supabaseAdmin from '../../lib/supabase';
 export type StaffRole = 'driver' | 'medic' | 'emt' | 'paramedic';
 export type ServiceType = 'MTS' | 'EAS' | 'both';
 export type CrewPosition = 'driver' | 'attendant';
+
+export type FilterName =
+  | 'availability'
+  | 'rest_hours'
+  | 'daily_hours'
+  | 'consecutive_days'
+  | 'certification';
+
+export interface FilterStep {
+  filter: FilterName;
+  passed: boolean;
+  /** Soft filters (consecutive_days) can flag without failing. */
+  soft?: boolean;
+  detail: string;
+}
 
 export interface ShiftSlot {
   slot_id: number;
@@ -35,17 +55,26 @@ export interface StaffCandidate {
   role: StaffRole;
   employment_type: 'full_time' | 'part_time';
   status: 'active' | 'inactive';
+  home_postal?: string | null;
 }
 
 export interface FilterResult {
   staff_id: number;
   full_name: string;
   role: StaffRole;
+  employment_type: 'full_time' | 'part_time';
+  home_postal: string | null;
   eligible: boolean;
   hard_blocked: boolean;
   block_reason?: string;
   consecutive_days_flag: boolean;
   consecutive_days_count: number;
+  filter_trace: FilterStep[];
+}
+
+interface CertRow {
+  cert_name: string;
+  expiry_date: string | null;
 }
 
 /**
@@ -298,6 +327,43 @@ export function isCertEligible(role: StaffRole, serviceType: 'MTS' | 'EAS'): boo
 }
 
 /**
+ * Fetches certifications for a set of staff, keyed by staff_id, in one query.
+ */
+async function fetchCertifications(staffIds: number[]): Promise<Map<number, CertRow[]>> {
+  const map = new Map<number, CertRow[]>();
+  if (staffIds.length === 0) return map;
+
+  const { data } = await supabaseAdmin
+    .from('staff_certifications')
+    .select('staff_id, cert_name, expiry_date')
+    .in('staff_id', staffIds);
+
+  for (const row of (data ?? []) as Array<CertRow & { staff_id: number }>) {
+    const list = map.get(row.staff_id) ?? [];
+    list.push({ cert_name: row.cert_name, expiry_date: row.expiry_date });
+    map.set(row.staff_id, list);
+  }
+  return map;
+}
+
+/**
+ * Returns true when the staff holds a valid (unexpired as of rosterDate)
+ * certification matching the required service type.
+ */
+function hasValidCertification(
+  certs: CertRow[] | undefined,
+  serviceType: 'MTS' | 'EAS',
+  rosterDate: string
+): boolean {
+  if (!certs || certs.length === 0) return false;
+  return certs.some(
+    (c) =>
+      c.cert_name?.toUpperCase() === serviceType &&
+      (!c.expiry_date || c.expiry_date >= rosterDate)
+  );
+}
+
+/**
  * Main filter pipeline: given a slot and a list of candidates, returns filter results.
  */
 export async function filterCandidates(
@@ -311,20 +377,30 @@ export async function filterCandidates(
   // against the roster date's AM/PM windows still work.
   const slotEnd = slotStart + slotDuration;
 
+  const certsByStaff = await fetchCertifications(candidates.map((c) => c.staff_id));
+
   const results: FilterResult[] = [];
 
   for (const candidate of candidates) {
+    const trace: FilterStep[] = [];
+    const base = {
+      staff_id: candidate.staff_id,
+      full_name: candidate.full_name,
+      role: candidate.role,
+      employment_type: candidate.employment_type,
+      home_postal: candidate.home_postal ?? null,
+    };
+
     // Skip inactive staff immediately
     if (candidate.status !== 'active') {
       results.push({
-        staff_id: candidate.staff_id,
-        full_name: candidate.full_name,
-        role: candidate.role,
+        ...base,
         eligible: false,
         hard_blocked: true,
         block_reason: 'Staff member is inactive',
         consecutive_days_flag: false,
         consecutive_days_count: 0,
+        filter_trace: [{ filter: 'availability', passed: false, detail: 'Staff member is inactive' }],
       });
       continue;
     }
@@ -337,18 +413,19 @@ export async function filterCandidates(
       slotEnd
     );
     if (blockedByLeave) {
+      trace.push({ filter: 'availability', passed: false, detail: 'On approved leave or marked unavailable' });
       results.push({
-        staff_id: candidate.staff_id,
-        full_name: candidate.full_name,
-        role: candidate.role,
+        ...base,
         eligible: false,
         hard_blocked: true,
         block_reason: 'On approved leave or marked unavailable',
         consecutive_days_flag: false,
         consecutive_days_count: 0,
+        filter_trace: trace,
       });
       continue;
     }
+    trace.push({ filter: 'availability', passed: true, detail: 'Available on this date' });
 
     // --- Step 2: Rest hours check (min 12 h) ---
     const lastEnd = await getLastShiftEnd(candidate.staff_id, rosterDate);
@@ -356,19 +433,24 @@ export async function filterCandidates(
       const shiftStartDt = new Date(`${rosterDate}T${slot.start_time}`);
       const restHours = (shiftStartDt.getTime() - lastEnd.getTime()) / (1000 * 60 * 60);
       if (restHours < 12) {
+        trace.push({
+          filter: 'rest_hours',
+          passed: false,
+          detail: `Insufficient rest (${restHours.toFixed(1)}h < 12h required)`,
+        });
         results.push({
-          staff_id: candidate.staff_id,
-          full_name: candidate.full_name,
-          role: candidate.role,
+          ...base,
           eligible: false,
           hard_blocked: true,
           block_reason: `Insufficient rest (${restHours.toFixed(1)}h < 12h required)`,
           consecutive_days_flag: false,
           consecutive_days_count: 0,
+          filter_trace: trace,
         });
         continue;
       }
     }
+    trace.push({ filter: 'rest_hours', passed: true, detail: 'At least 12h rest since last shift' });
 
     // --- Step 3: Daily hours check (max 12 h) ---
     const dailyMinutes = await getDailyScheduledMinutes(
@@ -378,47 +460,81 @@ export async function filterCandidates(
     );
     if (dailyMinutes + slotDuration > 720) {
       // 720 min = 12 h
+      const totalHours = ((dailyMinutes + slotDuration) / 60).toFixed(1);
+      trace.push({
+        filter: 'daily_hours',
+        passed: false,
+        detail: `Would exceed 12h daily limit (${totalHours}h)`,
+      });
       results.push({
-        staff_id: candidate.staff_id,
-        full_name: candidate.full_name,
-        role: candidate.role,
+        ...base,
         eligible: false,
         hard_blocked: true,
-        block_reason: `Would exceed 12h daily limit (${((dailyMinutes + slotDuration) / 60).toFixed(1)}h)`,
+        block_reason: `Would exceed 12h daily limit (${totalHours}h)`,
         consecutive_days_flag: false,
         consecutive_days_count: 0,
+        filter_trace: trace,
       });
       continue;
     }
+    trace.push({ filter: 'daily_hours', passed: true, detail: 'Within 12h daily limit' });
 
     // --- Step 4: Consecutive days (SOFT flag, NOT a hard block) ---
     const consecutiveDays = await getConsecutiveDays(candidate.staff_id, rosterDate);
     const consecutiveFlag = consecutiveDays >= 6; // 6 prior + today = 7+ consecutive
+    trace.push({
+      filter: 'consecutive_days',
+      passed: true,
+      soft: true,
+      detail: consecutiveFlag
+        ? `Soft flag: ${consecutiveDays} consecutive days prior (7+ with this shift)`
+        : `${consecutiveDays} consecutive days prior`,
+    });
 
     // --- Step 5: Certification / role match ---
+    // (a) role hierarchy, (b) a real, unexpired cert row for the service type.
     if (!isCertEligible(candidate.role, slot.service_type)) {
+      const reason = `Role '${candidate.role}' not eligible for service type '${slot.service_type}'`;
+      trace.push({ filter: 'certification', passed: false, detail: reason });
       results.push({
-        staff_id: candidate.staff_id,
-        full_name: candidate.full_name,
-        role: candidate.role,
+        ...base,
         eligible: false,
         hard_blocked: true,
-        block_reason: `Role '${candidate.role}' not eligible for service type '${slot.service_type}'`,
+        block_reason: reason,
         consecutive_days_flag: consecutiveFlag,
         consecutive_days_count: consecutiveDays,
+        filter_trace: trace,
       });
       continue;
     }
+    if (!hasValidCertification(certsByStaff.get(candidate.staff_id), slot.service_type, rosterDate)) {
+      const reason = `Missing or expired ${slot.service_type} certification`;
+      trace.push({ filter: 'certification', passed: false, detail: reason });
+      results.push({
+        ...base,
+        eligible: false,
+        hard_blocked: true,
+        block_reason: reason,
+        consecutive_days_flag: consecutiveFlag,
+        consecutive_days_count: consecutiveDays,
+        filter_trace: trace,
+      });
+      continue;
+    }
+    trace.push({
+      filter: 'certification',
+      passed: true,
+      detail: `Holds a valid ${slot.service_type} certification`,
+    });
 
     // Passed all filters
     results.push({
-      staff_id: candidate.staff_id,
-      full_name: candidate.full_name,
-      role: candidate.role,
+      ...base,
       eligible: true,
       hard_blocked: false,
       consecutive_days_flag: consecutiveFlag,
       consecutive_days_count: consecutiveDays,
+      filter_trace: trace,
     });
   }
 
@@ -434,7 +550,7 @@ export async function getEligibleCandidates(
 ): Promise<FilterResult[]> {
   const { data: staffList, error } = await supabaseAdmin
     .from('staff')
-    .select('staff_id, full_name, role, employment_type, status')
+    .select('staff_id, full_name, role, employment_type, status, home_postal')
     .eq('status', 'active');
 
   if (error) throw new Error(`Failed to fetch staff: ${error.message}`);

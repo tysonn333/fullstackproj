@@ -4,6 +4,8 @@ import { authenticate, requireAdmin, AuthenticatedRequest } from '../middleware/
 import { generateRoster } from '../services/scheduling/generator';
 import { logAudit } from '../services/audit.service';
 import { notifyRosterPublished } from '../services/notification.service';
+import { buildICS, CalendarEvent } from '../lib/ics';
+import { isOvernight } from '../services/scheduling/filter';
 
 const router = Router();
 router.use(authenticate);
@@ -175,5 +177,104 @@ router.put('/:id/publish', requireAdmin, async (req: AuthenticatedRequest, res: 
     next(err);
   }
 });
+
+/**
+ * GET /api/v1/roster/:id/calendar.ics
+ * Calendar integration — exports every crewed shift in the roster as an
+ * iCalendar (.ics) file for import into Google/Apple/Outlook calendars.
+ */
+router.get('/:id/calendar.ics', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const rosterId = parseInt(req.params.id, 10);
+
+    const { data: roster, error: rosterErr } = await supabaseAdmin
+      .from('rosters')
+      .select('roster_id, roster_date, status')
+      .eq('roster_id', rosterId)
+      .single();
+
+    if (rosterErr || !roster) {
+      res.status(404).json({ error: 'Roster not found' });
+      return;
+    }
+
+    const { data: slots, error: slotsErr } = await supabaseAdmin
+      .from('shift_slots')
+      .select(`
+        slot_id, start_time, end_time, service_type, crew_position,
+        ambulances(registration),
+        assignments(staff_id, status, staff(full_name, role))
+      `)
+      .eq('roster_id', rosterId)
+      .order('start_time', { ascending: true });
+
+    if (slotsErr) throw slotsErr;
+
+    const events = buildRosterEvents(roster.roster_date, slots ?? []);
+    const ics = buildICS(`EFAR Roster ${roster.roster_date}`, events, new Date());
+
+    res
+      .status(200)
+      .type('text/calendar')
+      .set('Content-Disposition', `attachment; filename="efar-roster-${roster.roster_date}.ics"`)
+      .send(ics);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Builds one calendar event per crewed shift slot in a roster.
+ * Times are Singapore local (UTC+8); the +08:00 offset yields a correct UTC
+ * instant that calendar apps render in the viewer's timezone.
+ */
+function buildRosterEvents(rosterDate: string, slots: unknown[]): CalendarEvent[] {
+  type SlotRow = {
+    slot_id: number;
+    start_time: string;
+    end_time: string;
+    service_type: string;
+    crew_position: string;
+    ambulances?: { registration?: string } | null;
+    assignments?:
+      | Array<{ staff_id: number; status: string; staff?: { full_name?: string; role?: string } | null }>
+      | { staff_id: number; status: string; staff?: { full_name?: string; role?: string } | null }
+      | null;
+  };
+
+  const events: CalendarEvent[] = [];
+
+  for (const raw of slots as SlotRow[]) {
+    const assignments = Array.isArray(raw.assignments)
+      ? raw.assignments
+      : raw.assignments
+      ? [raw.assignments]
+      : [];
+    const active = assignments.filter((a) => a.status !== 'cancelled');
+    if (active.length === 0) continue;
+
+    const start = new Date(`${rosterDate}T${raw.start_time}+08:00`);
+    const end = new Date(`${rosterDate}T${raw.end_time}+08:00`);
+    if (isOvernight(raw.start_time, raw.end_time)) {
+      end.setDate(end.getDate() + 1);
+    }
+
+    const reg = raw.ambulances?.registration ?? `AMB-${raw.slot_id}`;
+
+    for (const a of active) {
+      const name = a.staff?.full_name ?? `Staff ${a.staff_id}`;
+      events.push({
+        uid: `efar-slot-${raw.slot_id}-staff-${a.staff_id}@efar`,
+        summary: `${raw.service_type} ${raw.crew_position} — ${reg}`,
+        description: `${name} (${a.staff?.role ?? ''}) · ${raw.service_type} ${raw.crew_position} on ${reg}`,
+        location: reg,
+        start,
+        end,
+      });
+    }
+  }
+
+  return events;
+}
 
 export default router;

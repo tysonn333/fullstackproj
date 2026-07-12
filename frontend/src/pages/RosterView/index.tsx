@@ -2,7 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { format, addDays, subDays, isWeekend, parseISO } from 'date-fns';
 import { rosterApi } from '../../api/roster';
 import { flagsApi } from '../../api/flags';
+import { calendarApi } from '../../api/calendar';
 import { CrewGrid } from './CrewGrid';
+import { RosterTimeline } from './RosterTimeline';
 import { StaffDetail } from './StaffDetail';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
@@ -37,6 +39,8 @@ export const RosterView: React.FC = () => {
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'timeline'>('list');
+  const [exporting, setExporting] = useState(false);
 
   const { error: toastError, success: toastSuccess } = useToast();
   const { confirm } = useConfirm();
@@ -129,6 +133,20 @@ export const RosterView: React.FC = () => {
     });
   };
 
+  const handleExportCalendar = async () => {
+    if (!roster) return;
+    setExporting(true);
+    try {
+      await calendarApi.downloadRoster(roster.id, selectedDate);
+      toastSuccess('Calendar exported', 'The .ics file was downloaded — import it into your calendar app.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Export failed';
+      toastError('Calendar export failed', msg);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const handlePrevDay = () => setSelectedDate(format(subDays(parseISO(selectedDate), 1), 'yyyy-MM-dd'));
   const handleNextDay = () => setSelectedDate(format(addDays(parseISO(selectedDate), 1), 'yyyy-MM-dd'));
   const handleToday = () => setSelectedDate(today);
@@ -215,6 +233,33 @@ export const RosterView: React.FC = () => {
           {roster && !roster.published && !isReadOnly && (
             <span className="badge-blue badge text-xs">Draft</span>
           )}
+          {/* List / Timeline view toggle */}
+          <div className="flex items-center gap-0.5 p-0.5 bg-gray-100 rounded-lg">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1 ${
+                viewMode === 'list' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+              }`}
+              title="List view"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+              List
+            </button>
+            <button
+              onClick={() => setViewMode('timeline')}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1 ${
+                viewMode === 'timeline' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+              }`}
+              title="Timeline view — align irregular shifts on a shared time axis"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12M8 12h12M8 17h8M4 7h.01M4 12h.01M4 17h.01" />
+              </svg>
+              Timeline
+            </button>
+          </div>
           <button
             onClick={() => loadRoster(selectedDate)}
             className="btn-secondary btn-sm"
@@ -226,6 +271,20 @@ export const RosterView: React.FC = () => {
             </svg>
             Refresh
           </button>
+          {roster && (
+            <button
+              onClick={handleExportCalendar}
+              className="btn-secondary btn-sm"
+              disabled={exporting}
+              title="Export this roster as an .ics calendar file"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              {exporting ? 'Exporting…' : 'Add to Calendar'}
+            </button>
+          )}
           {!isReadOnly && isAdmin && (
             <button
               onClick={handleGenerate}
@@ -343,6 +402,18 @@ export const RosterView: React.FC = () => {
           <button onClick={() => loadRoster(selectedDate)} className="btn-secondary btn-sm mt-3">
             Try again
           </button>
+        </div>
+      ) : viewMode === 'timeline' ? (
+        <div className="flex gap-4 items-start">
+          <div className="flex-1 min-w-0 space-y-3">
+            {isWeekendOrHoliday && (
+              <div className="px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+                Weekend / Public Holiday schedule
+              </div>
+            )}
+            <RosterTimeline slots={slots} onStaffClick={setSelectedStaff} />
+          </div>
+          <div className="w-72 flex-shrink-0">{exceptionsPanel}</div>
         </div>
       ) : (
         <CrewGrid

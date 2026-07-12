@@ -6,13 +6,14 @@ import {
 import { staffApi } from '../../api/staff';
 import { availabilityApi } from '../../api/availability';
 import { LeaveRequestForm } from './LeaveRequestForm';
+import { AvailabilityForm } from './AvailabilityForm';
 import { AdminApprovalPanel } from './AdminApprovalPanel';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
 import { useAuth } from '../../hooks/useAuth';
 import type { Staff, LeaveRequest, Availability } from '../../types';
 
-type TabType = 'calendar' | 'request' | 'admin';
+type TabType = 'calendar' | 'availability' | 'request' | 'admin';
 
 const leaveTypeColors: Record<string, string> = {
   full_day: 'bg-red-200 text-red-800',
@@ -141,8 +142,22 @@ export const AvailabilityLeave: React.FC = () => {
     setCurrentMonth(format(d, 'yyyy-MM'));
   };
 
+  const [availabilityDate, setAvailabilityDate] = useState<string | undefined>(undefined);
+
+  const handleAvailabilitySaved = () => {
+    setTab('calendar');
+    loadCalendar();
+  };
+
+  // Clicking a calendar day jumps to the form with that date pre-filled.
+  const openAvailabilityFor = (dateStr: string) => {
+    setAvailabilityDate(dateStr);
+    setTab('availability');
+  };
+
   const tabs: { id: TabType; label: string }[] = [
     { id: 'calendar', label: 'Availability Calendar' },
+    { id: 'availability', label: 'Set Availability' },
     { id: 'request', label: 'Submit Leave Request' },
     // Approving leave is an admin action.
     ...(isAdmin ? [{ id: 'admin' as TabType, label: 'Admin Approvals' }] : []),
@@ -296,11 +311,14 @@ export const AvailabilityLeave: React.FC = () => {
                     const isHalfDay = leave?.leave_type === 'half_am' || leave?.leave_type === 'half_pm';
 
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={day.toISOString()}
+                        onClick={() => openAvailabilityFor(format(day, 'yyyy-MM-dd'))}
+                        title="Click to set availability for this day"
                         className={`
                           relative aspect-square rounded-lg flex flex-col items-center justify-start pt-1.5 px-1 text-xs
-                          transition-opacity
+                          transition-all hover:ring-2 hover:ring-blue-300 cursor-pointer
                           ${inCurrentMonth ? 'opacity-100' : 'opacity-30'}
                           ${bgClass}
                           ${today ? 'ring-2 ring-blue-500' : 'border border-gray-100'}
@@ -324,7 +342,7 @@ export const AvailabilityLeave: React.FC = () => {
                             <span className="text-[9px] text-amber-600">Partial</span>
                           </div>
                         )}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -356,6 +374,32 @@ export const AvailabilityLeave: React.FC = () => {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Set Availability Tab */}
+      {tab === 'availability' && (
+        <div className="max-w-2xl">
+          <div className="card">
+            <div className="card-header">
+              <h3 className="section-title">Set Availability</h3>
+              <p className="text-xs text-gray-500">Records feed directly into UC-004 eligibility filtering</p>
+            </div>
+            <div className="card-body">
+              {loadingStaff ? (
+                <div className="flex justify-center py-6"><LoadingSpinner size="md" /></div>
+              ) : staffList.length === 0 ? (
+                <p className="text-sm text-gray-500">No staff available.</p>
+              ) : (
+                <AvailabilityForm
+                  staffList={staffList}
+                  initialStaffId={selectedStaffId || undefined}
+                  initialDate={availabilityDate}
+                  onSaved={handleAvailabilitySaved}
+                />
+              )}
+            </div>
           </div>
         </div>
       )}

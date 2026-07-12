@@ -59,10 +59,24 @@ function makeQueryBuilder(returnData: unknown = [], returnError: unknown = null)
   return builder;
 }
 
+// A generous default certification set: staff 1–50 each hold valid MTS + EAS
+// certs (far-future expiry). This keeps the role-hierarchy the deciding factor
+// in the certification-match tests; individual tests override it to exercise
+// the missing/expired-cert paths.
+function defaultCerts(): Array<{ staff_id: number; cert_name: string; expiry_date: string }> {
+  const rows: Array<{ staff_id: number; cert_name: string; expiry_date: string }> = [];
+  for (let id = 1; id <= 50; id++) {
+    rows.push({ staff_id: id, cert_name: 'MTS', expiry_date: '2099-12-31' });
+    rows.push({ staff_id: id, cert_name: 'EAS', expiry_date: '2099-12-31' });
+  }
+  return rows;
+}
+
 // Global mock state for tests
 let mockLeaveData: unknown[] = [];
 let mockAvailData: unknown = null;
 let mockAssignData: unknown[] = [];
+let mockCertData: unknown[] = defaultCerts();
 let mockAssignCallCount = 0;
 
 jest.mock('../src/lib/supabase', () => ({
@@ -79,6 +93,9 @@ jest.mock('../src/lib/supabase', () => ({
         mockAssignCallCount++;
         return makeQueryBuilder(mockAssignData);
       }
+      if (table === 'staff_certifications') {
+        return makeQueryBuilder(mockCertData);
+      }
       if (table === 'staff') {
         return makeQueryBuilder([]);
       }
@@ -86,6 +103,12 @@ jest.mock('../src/lib/supabase', () => ({
     }),
   },
 }));
+
+// Restore the generous cert default before every test so an override in one
+// test cannot leak into the next.
+beforeEach(() => {
+  mockCertData = defaultCerts();
+});
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -528,5 +551,87 @@ describe('filterCandidates() — Multiple candidates', () => {
     expect(eligible).toHaveLength(2);
     expect(blocked).toHaveLength(2);
     expect(eligible.map((e) => e.role).sort()).toEqual(['driver', 'paramedic']);
+  });
+});
+
+describe('filterCandidates() — Step 5: Certification data (expiry / missing)', () => {
+  const rosterDate = '2025-06-15';
+
+  beforeEach(() => {
+    mockLeaveData = [];
+    mockAvailData = null;
+    mockAssignData = [];
+  });
+
+  it('blocks a role-eligible medic whose MTS cert has expired before the roster date', async () => {
+    mockCertData = [{ staff_id: 1, cert_name: 'MTS', expiry_date: '2025-01-01' }]; // expired
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate({ role: 'medic' })]);
+    expect(results[0].eligible).toBe(false);
+    expect(results[0].block_reason).toContain('certification');
+  });
+
+  it('blocks a role-eligible paramedic with no certification records at all', async () => {
+    mockCertData = [];
+    const results = await filterCandidates(easSlot, rosterDate, [makeCandidate({ role: 'paramedic' })]);
+    expect(results[0].eligible).toBe(false);
+    expect(results[0].block_reason).toContain('certification');
+  });
+
+  it('allows a medic whose MTS cert expires on the roster date (boundary)', async () => {
+    mockCertData = [{ staff_id: 1, cert_name: 'MTS', expiry_date: '2025-06-15' }];
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate({ role: 'medic' })]);
+    expect(results[0].eligible).toBe(true);
+  });
+
+  it('treats a null expiry_date as never-expiring', async () => {
+    mockCertData = [{ staff_id: 1, cert_name: 'MTS', expiry_date: null }];
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate({ role: 'medic' })]);
+    expect(results[0].eligible).toBe(true);
+  });
+});
+
+describe('filterCandidates() — filter_trace', () => {
+  const rosterDate = '2025-06-15';
+
+  beforeEach(() => {
+    mockLeaveData = [];
+    mockAvailData = null;
+    mockAssignData = [];
+  });
+
+  it('records all five filter steps for a fully eligible candidate', async () => {
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate({ role: 'medic' })]);
+    const steps = results[0].filter_trace.map((s) => s.filter);
+    expect(steps).toEqual([
+      'availability',
+      'rest_hours',
+      'daily_hours',
+      'consecutive_days',
+      'certification',
+    ]);
+    expect(results[0].filter_trace.every((s) => s.passed)).toBe(true);
+  });
+
+  it('marks the consecutive_days step as soft', async () => {
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate({ role: 'medic' })]);
+    const consecutive = results[0].filter_trace.find((s) => s.filter === 'consecutive_days');
+    expect(consecutive?.soft).toBe(true);
+  });
+
+  it('stops the trace at the failing hard filter', async () => {
+    mockLeaveData = [{ start_date: '2025-06-15', end_date: '2025-06-15', leave_type: 'full_day' }];
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate()]);
+    const trace = results[0].filter_trace;
+    expect(trace).toHaveLength(1);
+    expect(trace[0].filter).toBe('availability');
+    expect(trace[0].passed).toBe(false);
+  });
+
+  it('carries home_postal and employment_type through to the result', async () => {
+    const results = await filterCandidates(baseSlot, rosterDate, [
+      makeCandidate({ role: 'medic', home_postal: '310450', employment_type: 'part_time' }),
+    ]);
+    expect(results[0].home_postal).toBe('310450');
+    expect(results[0].employment_type).toBe('part_time');
   });
 });
