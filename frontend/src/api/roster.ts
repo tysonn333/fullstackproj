@@ -225,6 +225,18 @@ export const rosterApi = {
   },
 
   /**
+   * Lightweight month/range lookup: which dates have a roster and their status.
+   * Used by the calendar to show per-day indicators without fetching every
+   * day's slots up front.
+   */
+  listRange: async (from: string, to: string): Promise<Array<{ date: string; status: string }>> => {
+    const { data } = await apiClient.get<{ data: RosterRow[] }>(
+      `/api/v1/roster?from=${from}&to=${to}`
+    );
+    return (data.data ?? []).map((r) => ({ date: r.roster_date, status: r.status }));
+  },
+
+  /**
    * UC-002 — Auto-generate the roster for a date. Creates shift slots for every
    * in-service ambulance, runs the filter + ranking pipeline, auto-assigns the
    * best crew to each slot, and raises flags for any gaps. Pass force=true to

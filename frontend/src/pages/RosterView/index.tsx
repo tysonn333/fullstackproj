@@ -4,6 +4,7 @@ import { rosterApi } from '../../api/roster';
 import { flagsApi } from '../../api/flags';
 import { CrewGrid } from './CrewGrid';
 import { TimelineGrid } from './TimelineGrid';
+import { RosterCalendar } from './RosterCalendar';
 import { StaffDetail } from './StaffDetail';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
@@ -38,7 +39,7 @@ export const RosterView: React.FC = () => {
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
-  const [view, setView] = useState<'timeline' | 'list'>('timeline');
+  const [view, setView] = useState<'calendar' | 'timeline' | 'list'>('timeline');
 
   const { error: toastError, success: toastSuccess } = useToast();
   const { confirm } = useConfirm();
@@ -352,6 +353,14 @@ export const RosterView: React.FC = () => {
           <div className="flex items-center justify-end mb-3">
             <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
               <button
+                onClick={() => setView('calendar')}
+                className={`btn-sm rounded-md px-3 ${
+                  view === 'calendar' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Calendar
+              </button>
+              <button
                 onClick={() => setView('timeline')}
                 className={`btn-sm rounded-md px-3 ${
                   view === 'timeline' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-500 hover:text-gray-700'
@@ -370,7 +379,14 @@ export const RosterView: React.FC = () => {
             </div>
           </div>
 
-          {view === 'timeline' ? (
+          {view === 'calendar' ? (
+            <RosterCalendar
+              selectedDate={selectedDate}
+              onSelectDate={setSelectedDate}
+              onStaffClick={setSelectedStaff}
+              holidays={SG_PUBLIC_HOLIDAYS}
+            />
+          ) : view === 'timeline' ? (
             <TimelineGrid
               slots={slots}
               isReadOnly={isReadOnly}
