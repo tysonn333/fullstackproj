@@ -32,11 +32,6 @@ The EFAR Ambulance Scheduling System replaces a manual, spreadsheet-based roster
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                     Browser                         │
-│              React + TypeScript (Vite)              │
-│                  frontend/                          │
 └──────────────────────┬──────────────────────────────┘
                        │ REST (HTTP/JSON)
                        │ VITE_API_URL
