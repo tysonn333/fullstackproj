@@ -1,0 +1,74 @@
+Changelog — 2026-07-14
+=======================
+
+## Calendar: roster-highlighted days (light blue)
+- frontend/src/pages/RosterView/CalendarGrid.tsx
+  Added `rosterDates: Set<string>` prop and `onMonthChange` callback.
+  Days with rosters render with `bg-blue-100`.
+
+- frontend/src/pages/RosterView/index.tsx
+  Added `rosterDates` state and `handleMonthChange` that fetches dates
+  for the visible month via `rosterApi.getRosterDatesInRange`.
+
+- frontend/src/api/roster.ts
+  Added `getRosterDatesInRange(from, to)` → `Set<string>`.
+
+## Split slot generation from 12h → 6h blocks
+- backend/src/services/scheduling/generator.ts
+  Replaced DAY_SHIFT/NIGHT_SHIFT constants with SHIFT_BLOCKS array
+  (4 × 6-hour blocks: 00:00–06:00, 06:00–12:00, 12:00–18:00, 18:00–00:00).
+  Generation loop now iterates over all 4 blocks instead of 2 shifts.
+  Block 3 (18:00–00:00) uses end_time "00:00:00" — filter helpers handle the
+  midnight crossing correctly (isOvernight, shiftDurationMinutes, etc.).
+
+## Part-timer daily cap (6h)
+- backend/src/services/scheduling/filter.ts
+  Added Step 0 (part-time max-hours) to the pipeline header comment.
+  Added pure-field check in evaluateCandidate: part_time + slotDuration > 360
+  → hard block with "Part-time staff cannot work shifts exceeding 6 hours".
+  Placed before Step 1 (availability check) to avoid unnecessary DB queries.
+
+  Modified Step 3 (daily hours check) to use per-employment-type limit:
+  part_time → 360 min cap, full_time → 720 min cap. This prevents part-timers
+  from being assigned to multiple 6h blocks in one day.
+
+## 00:00–06:00 column empty in CrewGrid (overnight wrap)
+- frontend/src/pages/RosterView/CrewGrid.tsx
+  Added `isOvernightShift()` and `slotsForBlock()` — for block 0, includes
+  overnight slots that started at block 3 (18:00) and wrap around.
+  Overnight-wrap cells forced to span 1 instead of trying to span back to
+  block 3.
+
+## CrewGrid vertical sizing
+- frontend/src/pages/RosterView/CrewGrid.tsx
+  Increased cell padding from py-1.5/py-2 to py-3 for taller rows.
+
+## Manual editing (shift swap dialog)
+- backend/src/api/assignment.routes.ts
+  Reassign endpoint now also accepts 'draft' status rosters (was
+  published/locked only).
+
+- frontend/src/pages/RosterView/SlotSwapDialog.tsx  (NEW)
+  Modal dialog showing current assignment + ranked replacement candidates.
+  Candidates sorted by score descending, color-coded green→red via HSL heat
+  gradient on left border, avatar, score badge, and Assign button.
+
+- frontend/src/pages/RosterView/CrewGrid.tsx
+  Added onSlotSwap prop. Staff sub-cells (driver/attendant) are clickable
+  when not read-only. Expanded detail panel now has "Swap Staff" / "Assign
+  Staff" buttons and an actionable empty-state placeholder.
+
+- frontend/src/pages/RosterView/index.tsx
+  Added swap state (swapSlots), handleSlotSwap/handleSwapDone callbacks,
+  renders SlotSwapDialog. Passes onSlotSwap to CrewGrid (disabled in
+  read-only mode).
+
+## Documentation
+- improvements.txt  (NEW) — future improvement ideas
+- startingprocedure.txt  (NEW) — how to start frontend + backend
+- changelog-7-14-26  (NEW) — this file
+
+## Known gaps
+- No unit/integration tests exist for filter.ts or generator.ts
+- Swap candidates list is not filterable/searchable
+- No "drop without reassign" action (unassigning mid-air)

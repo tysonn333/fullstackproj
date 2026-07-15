@@ -1,0 +1,46 @@
+STARTUP PROCEDURE
+==================
+
+Prerequisites: Node.js 18+, npm
+
+Step 1 — Environment
+  The root .env file is already set up for both backend and frontend.
+  Do NOT commit or share the .env file (contains secrets).
+
+Step 2 — Backend
+  cd backend
+  npm install          (first time only)
+  npm run build        (compiles TypeScript → dist/)
+  node dist/app.js     (starts server on port 3000)
+
+  Alternative (dev with auto-reload):
+  npm run dev          (uses ts-node-dev)
+
+Step 3 — Frontend
+  cd frontend
+  npm install          (first time only)
+  npx vite             (starts dev server on port 5173)
+
+  For network access:
+  npx vite --host 0.0.0.0
+
+Step 4 — Verify
+  Backend: http://localhost:3000
+  Frontend: http://localhost:5173
+
+  The frontend proxies API calls to localhost:3000 via VITE_API_URL.
+
+Kill & Restart
+  Backend:  kill $(ps aux | grep "node dist/app.js" | grep -v grep | awk '{print $2}')
+  Frontend: kill $(ps aux | grep "vite" | grep -v grep | awk '{print $2}')
+
+  After killing, clear Vite cache:
+  rm -rf frontend/node_modules/.vite
+
+  Then re-run steps 2–3.
+
+Troubleshooting
+  - Frontend slow to start on WSL: expected (Node module loading on /mnt/c/ is slow)
+  - Backend slow on first request: Express cold-start on WSL (~18s)
+  - If roster generation times out: increase axios timeout (frontend/src/api/client.ts:11)
+    and server timeout (backend/src/app.ts:72)

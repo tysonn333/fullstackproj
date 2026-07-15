@@ -1,0 +1,45 @@
+# Future Improvements
+
+## Roster Generation
+- Add configurable shift block lengths (e.g., 8h/12h) instead of fixed 6h blocks
+- Handle ambulance service_type 'both' more granularly (per-block type selection)
+- Support weekend/public-holiday reduced ambulance fleet config
+- Track generation history per-roster (not just latest)
+
+## Filter Pipeline
+- Consider staff preferences / shift bidding in eligibility
+- Add location-based filtering (home_postal distance to base)
+- Make daily-hour and rest-hour limits configurable per employment_type
+- Add maximum-consecutive-shifts hard block (beyond current soft flag)
+
+## Manual Editing
+- Allow unassigning staff (drop) without immediately reassigning
+- Bulk-assign across multiple slots in one action
+- Drag-and-drop staff between slots
+- Highlight part-timers in the swap dialog when they'd exceed daily cap
+- Search/filter candidates by name in swap dialog
+
+## UI
+- Infinite scroll or pagination for candidate lists
+- Real-time updates via WebSocket when roster changes
+- Keyboard navigation for grid (arrow keys to move between cells)
+- Export roster to PDF/CSV
+- Collapsible ambulance rows in grid
+- Dark mode
+
+## Performance
+- Batch eligibility checks for multiple slots at once (reduce DB round-trips)
+- Cache staff availability/leave data for the generation run
+- Lazy-load historical rosters in calendar view
+- Add pagination or virtualization to candidate lists
+
+## Testing
+- Unit tests for filter pipeline (filter.ts)
+- Unit tests for generator logic (generator.ts)
+- Integration tests for the reassign endpoint
+- E2E test for the swap dialog flow
+
+## Operations
+- Add a "revert" action to undo the last manual swap
+- Audit log viewer in the UI
+- Rate-limit roster generation to prevent accidental mass regeneration
