@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { ShiftSlot, Staff, JobType, StaffRole } from '../../types';
+import type { ShiftSlot, Staff } from '../../types';
 
 interface CrewGridProps {
   slots: ShiftSlot[];
@@ -7,16 +7,12 @@ interface CrewGridProps {
   isReadOnly: boolean;
   isWeekendOrHoliday: boolean;
   onStaffClick: (staff: Staff) => void;
+  onSlotSwap?: (slotId: string, role: 'driver' | 'attendant') => void;
   exceptionsPanel?: React.ReactNode;
-  /** UC-001 A4 — non-matching rows are greyed out, never removed. */
-  serviceFilter?: JobType | '';
-  roleFilter?: StaffRole | '';
-  /** Opens the Engine Decision inspector (UC-004/005) for a slot. */
-  onInspectEngine?: (slot: ShiftSlot) => void;
 }
 
 const jobTypeBadge: Record<string, string> = {
-  // MTS = informational data → sky (not red, which is the brand/critical hue).
+  // MTS = informational data → sky (kept distinct from brand/critical red).
   MTS: 'bg-sky-100 text-sky-700 border border-sky-200',
   EAS: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
 };
@@ -29,12 +25,15 @@ const statusBadge: Record<string, string> = {
   unfilled: 'badge-yellow',
 };
 
-const roleBadge: Record<string, string> = {
-  driver: 'bg-sky-100 text-sky-700',
-  medic: 'bg-green-100 text-green-700',
-  emt: 'bg-violet-100 text-violet-700',
-  paramedic: 'bg-orange-100 text-orange-700',
-};
+// Fixed 6-hour blocks covering the full 24h day — replaces the old
+// dynamically-derived columns. Every roster day is shown against these
+// same 4 columns regardless of what slots actually exist.
+const SHIFT_BLOCKS = [
+  { label: '00:00–06:00', start: '00:00' },
+  { label: '06:00–12:00', start: '06:00' },
+  { label: '12:00–18:00', start: '12:00' },
+  { label: '18:00–24:00', start: '18:00' },
+] as const;
 
 function calcHours(start: string, end: string): number {
   const [sh, sm] = start.split(':').map(Number);
@@ -44,16 +43,55 @@ function calcHours(start: string, end: string): number {
   return parseFloat((diff / 60).toFixed(1));
 }
 
+function ambKey(slot: ShiftSlot): string {
+  return slot.ambulance?.call_sign || `AMB-${slot.id.slice(-4)}`;
+}
+
+function timeKey(slot: ShiftSlot): string {
+  return `${slot.shift_start?.slice(0, 5)}–${slot.shift_end?.slice(0, 5)}`;
+}
+
+// Which of the 4 fixed blocks a slot starts in.
+function blockIndexForSlot(slot: ShiftSlot): number {
+  const start = slot.shift_start?.slice(0, 5) || '00:00';
+  const idx = SHIFT_BLOCKS.findIndex((b) => b.start === start);
+  return idx === -1 ? 0 : idx;
+}
+
+// True if the shift crosses midnight (end time <= start time).
+function isOvernightShift(slot: ShiftSlot): boolean {
+  return slot.shift_end != null && slot.shift_start != null && slot.shift_end <= slot.shift_start;
+}
+
+// How many 6-hour blocks a slot occupies — 1 for a 6h shift, 2 for a 12h shift.
+function blockSpanForSlot(slot: ShiftSlot): number {
+  if (!slot.shift_start || !slot.shift_end) return 1;
+  const hours = calcHours(slot.shift_start, slot.shift_end);
+  return hours > 6 ? 2 : 1;
+}
+
+// Returns all slots that should appear in the given block index.
+// For block 0, also includes overnight slots that started at block 3 (18:00) and wrap around.
+function slotsForBlock(slots: ShiftSlot[], blockIdx: number): ShiftSlot[] {
+  const startingHere = slots.filter((s) => blockIndexForSlot(s) === blockIdx);
+  // Overnight shifts starting at block 3 also cover block 0 (00:00-06:00)
+  if (blockIdx === 0) {
+    const overnightFromBlock3 = slots.filter(
+      (s) => blockIndexForSlot(s) === 3 && isOvernightShift(s)
+    );
+    return [...startingHere, ...overnightFromBlock3];
+  }
+  return startingHere;
+}
+
 export const CrewGrid: React.FC<CrewGridProps> = ({
   slots,
   date,
   isReadOnly,
   isWeekendOrHoliday,
   onStaffClick,
+  onSlotSwap,
   exceptionsPanel,
-  serviceFilter = '',
-  roleFilter = '',
-  onInspectEngine,
 }) => {
   const [expandedSlot, setExpandedSlot] = useState<string | null>(null);
 
@@ -62,17 +100,136 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
   // ambulance reduction happens at generation time on the backend.
   const displaySlots = slots;
 
-  // UC-001 A4: filters grey rows out (opacity) so the full picture stays visible.
-  const matchesFilters = (slot: ShiftSlot): boolean => {
-    if (serviceFilter && slot.job_type !== serviceFilter) return false;
-    if (roleFilter) {
-      const assignments = slot.assignments || [];
-      const roleMatch =
-        (roleFilter === 'driver' && slot.required_role === 'driver') ||
-        assignments.some((a) => a.staff?.role === roleFilter);
-      if (!roleMatch) return false;
+  // Rows: one per ambulance that appears in this day's slots
+  const ambulanceRows = Array.from(
+    new Map(displaySlots.map((s) => [ambKey(s), s])).values()
+  );
+
+  const expandedSlotData = displaySlots.find((s) => s.id === expandedSlot) || null;
+  const hasAssignment = expandedSlotData && Array.isArray(expandedSlotData.assignments) && expandedSlotData.assignments.length > 0;
+
+  // Pick the job type / status from whichever slot in this block has data
+  function blockJobType(slotsAtBlock: ShiftSlot[]): string {
+    return slotsAtBlock.find((s) => s.job_type)?.job_type || 'MTS';
+  }
+  function blockStatus(slotsAtBlock: ShiftSlot[]): string {
+    return slotsAtBlock.find((s) => s.status)?.status || 'unfilled';
+  }
+  function blockServiceLabel(slotsAtBlock: ShiftSlot[]): string {
+    const types = [...new Set(slotsAtBlock.map((s) => s.job_type).filter(Boolean))];
+    return types.join('/') || 'MTS';
+  }
+
+  const renderCell = (rowKey: string, driverSlot: ShiftSlot | null, attendantSlot: ShiftSlot | null, span: number, colIndex: number, cellKey: string) => {
+    const slotsHere = [driverSlot, attendantSlot].filter(Boolean) as ShiftSlot[];
+    const isEmpty = slotsHere.length === 0;
+
+    // grid-column: ambulance-col (1) + block-start + 1
+    const colStart = colIndex + 2;
+
+    if (isEmpty) {
+      return (
+        <div
+          key={cellKey}
+          style={{ gridColumn: `${colStart} / span ${span}` }}
+          className="border-b border-gray-100 px-2 py-3 bg-gray-25"
+        />
+      );
     }
-    return true;
+
+    const firstSlot = slotsHere[0];
+    const isExpanded = expandedSlot && slotsHere.some((s) => s.id === expandedSlot);
+
+    const driverAssignment = driverSlot ? (Array.isArray(driverSlot.assignments) ? driverSlot.assignments[0] : undefined) : undefined;
+    const attendantAssignment = attendantSlot ? (Array.isArray(attendantSlot.assignments) ? attendantSlot.assignments[0] : undefined) : undefined;
+
+    const isTwelveHour = span === 2;
+    const driverPtViolation = isTwelveHour && driverAssignment?.staff?.employment_type === 'part_time';
+    const attendantPtViolation = isTwelveHour && attendantAssignment?.staff?.employment_type === 'part_time';
+    const hasViolation = driverPtViolation || attendantPtViolation;
+
+    const serviceLabel = blockServiceLabel(slotsHere);
+
+    return (
+      <div
+        key={cellKey}
+        style={{ gridColumn: `${colStart} / span ${span}` }}
+        onClick={() => setExpandedSlot(firstSlot.id)}
+        className={`relative border-b border-gray-100 px-1.5 py-3 cursor-pointer transition-colors hover:bg-blue-50 min-w-0 ${
+          isExpanded ? 'bg-blue-50 ring-2 ring-inset ring-blue-300' : ''
+        } ${hasViolation ? 'bg-red-50/40' : ''}`}
+      >
+        <div className="flex flex-col gap-1 min-w-0">
+          <div className="flex items-center justify-between gap-1">
+            <span className={`badge text-[10px] max-w-[60%] ${jobTypeBadge[firstSlot.job_type] || 'badge-gray'}`}>
+              <span className="block truncate">{serviceLabel}</span>
+            </span>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {isTwelveHour && (
+                <span className="badge-gray badge text-[10px]">12h</span>
+              )}
+              <span className={`badge capitalize text-[10px] ${statusBadge[firstSlot.status] || 'badge-gray'}`}>
+                {firstSlot.status}
+              </span>
+            </div>
+          </div>
+
+          {/* Split cell: driver | attendant */}
+          <div className="grid grid-cols-2 gap-1">
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                if (driverSlot && onSlotSwap && !isReadOnly) {
+                  onSlotSwap(driverSlot.id, 'driver');
+                } else if (driverAssignment?.staff) {
+                  onStaffClick(driverAssignment.staff);
+                }
+              }}
+              className={`rounded px-1.5 py-1 text-center overflow-hidden ${
+                onSlotSwap && driverSlot && !isReadOnly ? 'cursor-pointer hover:ring-2 hover:ring-blue-300' : driverAssignment?.staff ? 'cursor-pointer hover:ring-2 hover:ring-blue-200' : ''
+              } ${
+                driverPtViolation
+                  ? 'bg-red-50 border border-red-200'
+                  : 'bg-white border border-gray-100'
+              }`}
+            >
+              <p className="text-[9px] text-gray-400 uppercase tracking-wide">Driver</p>
+              <p className="text-xs font-medium text-gray-800 truncate" title={driverAssignment?.staff?.name || ''}>
+                {driverAssignment?.staff?.name || '—'}
+              </p>
+              {driverAssignment?.staff?.employment_type === 'part_time' && (
+                <span className="text-[9px] text-red-400 font-medium">PT</span>
+              )}
+            </div>
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                if (attendantSlot && onSlotSwap && !isReadOnly) {
+                  onSlotSwap(attendantSlot.id, 'attendant');
+                } else if (attendantAssignment?.staff) {
+                  onStaffClick(attendantAssignment.staff);
+                }
+              }}
+              className={`rounded px-1.5 py-1 text-center overflow-hidden ${
+                onSlotSwap && attendantSlot && !isReadOnly ? 'cursor-pointer hover:ring-2 hover:ring-blue-300' : attendantAssignment?.staff ? 'cursor-pointer hover:ring-2 hover:ring-blue-200' : ''
+              } ${
+                attendantPtViolation
+                  ? 'bg-red-50 border border-red-200'
+                  : 'bg-white border border-gray-100'
+              }`}
+            >
+              <p className="text-[9px] text-gray-400 uppercase tracking-wide">Attendant</p>
+              <p className="text-xs font-medium text-gray-800 truncate" title={attendantAssignment?.staff?.name || ''}>
+                {attendantAssignment?.staff?.name || '—'}
+              </p>
+              {attendantAssignment?.staff?.employment_type === 'part_time' && (
+                <span className="text-[9px] text-red-400 font-medium">PT</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -110,206 +267,191 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
             <p className="text-sm font-medium">No roster found for {date}</p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {displaySlots.map((slot) => {
-              const isExpanded = expandedSlot === slot.id;
-              const hours = slot.shift_start && slot.shift_end
-                ? calcHours(slot.shift_start, slot.shift_end)
-                : null;
-              const assignments = slot.assignments || [];
-              const hasConsecutiveWarning = assignments.some((a) =>
-                (a.staff as Staff & { consecutive_days?: number })?.consecutive_days !== undefined &&
-                ((a.staff as Staff & { consecutive_days?: number })?.consecutive_days ?? 0) >= 7
-              );
+          <div className="card overflow-x-auto min-w-0">
+            <div
+              className="grid"
+              style={{ gridTemplateColumns: `120px repeat(${SHIFT_BLOCKS.length}, 1fr)` }}
+            >
+              {/* Top-left corner cell: date */}
+              <div className="flex flex-col items-center justify-center border-b border-r border-gray-100 bg-gray-50 px-2 py-3">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Date</p>
+                <p className="text-sm font-bold text-gray-900">{date}</p>
+              </div>
 
-              const dimmed = !matchesFilters(slot);
-
-              return (
+              {/* Header row: 4 fixed 6-hour blocks */}
+              {SHIFT_BLOCKS.map((b) => (
                 <div
-                  key={slot.id}
-                  className={`card overflow-hidden transition-all ${
-                    isExpanded ? 'shadow-card-hover ring-1 ring-blue-200' : ''
-                  } ${dimmed ? 'opacity-35 grayscale' : ''}`}
+                  key={`col-${b.label}`}
+                  className="flex items-center justify-center border-b border-gray-100 bg-gray-50 px-2 py-3"
                 >
-                  {/* Slot header row */}
-                  <div
-                    className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
-                    onClick={() => setExpandedSlot(isExpanded ? null : slot.id)}
+                  <span className="text-xs font-semibold text-gray-700">{b.label}</span>
+                </div>
+              ))}
+
+              {/* Rows: one per ambulance */}
+              {ambulanceRows.map((rowSlot) => {
+                const rowKey = ambKey(rowSlot);
+                const rowSlots = displaySlots.filter((s) => ambKey(s) === rowKey);
+
+                // Walk the 4 blocks left to right. At each block, find the
+                // driver slot and attendant slot (both may exist for the same
+                // time range), combine them in one cell, then skip the span.
+                const cells: React.ReactNode[] = [];
+                let blockIdx = 0;
+                while (blockIdx < SHIFT_BLOCKS.length) {
+                  const slotsAtBlock = slotsForBlock(rowSlots, blockIdx);
+                  if (slotsAtBlock.length > 0) {
+                    const driverS = slotsAtBlock.find((s) => s.required_role === 'driver') || null;
+                    const attendantS = slotsAtBlock.find((s) => s.required_role !== 'driver') || null;
+                    // For an overnight shift wrapping into block 0, only span 1
+                    const span = blockIdx === 0 && slotsAtBlock.some(isOvernightShift)
+                      ? 1
+                      : Math.min(blockSpanForSlot(slotsAtBlock[0]), SHIFT_BLOCKS.length - blockIdx);
+                    cells.push(renderCell(rowKey, driverS, attendantS, span, blockIdx, `${rowKey}-${blockIdx}`));
+                    blockIdx += span;
+                  } else {
+                    cells.push(renderCell(rowKey, null, null, 1, blockIdx, `${rowKey}-${blockIdx}`));
+                    blockIdx += 1;
+                  }
+                }
+
+                return (
+                  <React.Fragment key={rowKey}>
+                    {/* Row header: ambulance */}
+                    <div style={{ gridColumn: 1 }} className="flex flex-col items-center justify-center border-r border-b border-gray-100 bg-gray-50 px-2 py-3">
+                      <p className="text-sm font-bold text-gray-900 truncate w-full text-center">{rowKey}</p>
+                      <p className="text-xs text-gray-400 truncate w-full text-center">{rowSlot.ambulance?.vehicle_number}</p>
+                    </div>
+                    {cells}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Expanded detail — same content/behavior as the previous accordion expand,
+            now shown below the grid since a grid cell has no room to expand in place. */}
+        {expandedSlotData && (
+          <div className="card mt-3 border-t-2 border-blue-200 bg-gray-50 px-4 py-3">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold text-gray-800">
+                {ambKey(expandedSlotData)} · {timeKey(expandedSlotData)}
+              </p>
+              <button
+                onClick={() => setExpandedSlot(null)}
+                className="text-gray-400 hover:text-gray-600"
+                aria-label="Close details"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm mb-3">
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Slot ID</p>
+                <p className="font-mono text-xs text-gray-700">{expandedSlotData.id}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Date</p>
+                <p className="font-medium text-gray-800">{expandedSlotData.shift_date}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Job Type</p>
+                <p className="font-medium text-gray-800">{expandedSlotData.job_type}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Hours</p>
+                <p className="font-medium text-gray-800">
+                  {expandedSlotData.shift_start && expandedSlotData.shift_end
+                    ? `${calcHours(expandedSlotData.shift_start, expandedSlotData.shift_end)}h`
+                    : '—'}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Staff</p>
+                {!isReadOnly && onSlotSwap && (
+                  <button
+                    onClick={() => onSlotSwap(expandedSlotData.id, expandedSlotData.required_role === 'driver' ? 'driver' : 'attendant')}
+                    className="btn-secondary btn-sm text-xs"
                   >
-                    {/* Ambulance info */}
-                    <div className="flex-shrink-0 w-24 text-center">
-                      <p className="text-sm font-bold text-gray-900">
-                        {slot.ambulance?.call_sign || `AMB-${slot.id.slice(-4)}`}
-                      </p>
-                      <p className="text-xs text-gray-400">{slot.ambulance?.vehicle_number}</p>
-                    </div>
-
-                    {/* Job type */}
-                    <span className={`badge text-xs font-semibold ${jobTypeBadge[slot.job_type] || 'badge-gray'}`}>
-                      {slot.job_type}
-                    </span>
-
-                    {/* Shift time */}
-                    <div className="flex-shrink-0 text-sm text-gray-700">
-                      <span className="font-medium">{slot.shift_start?.slice(0, 5)}</span>
-                      <span className="text-gray-400 mx-1">—</span>
-                      <span className="font-medium">{slot.shift_end?.slice(0, 5)}</span>
-                      {hours && (
-                        <span className="text-xs text-gray-400 ml-1">({hours}h)</span>
-                      )}
-                    </div>
-
-                    {/* Required role */}
-                    <span className={`badge capitalize text-xs ${roleBadge[slot.required_role] || 'badge-gray'}`}>
-                      {slot.required_role}
-                    </span>
-
-                    {/* Crew names */}
-                    <div className="flex-1 flex items-center gap-2 flex-wrap">
-                      {assignments.length === 0 ? (
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                            Unfilled
-                          </span>
-                          {onInspectEngine && !isReadOnly && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onInspectEngine(slot);
-                              }}
-                              className="text-xs font-medium text-white bg-red-600 hover:bg-red-700 px-2 py-0.5 rounded-full transition-colors"
-                              title="Open the Engine Decision inspector and assign a crew member"
-                            >
-                              ⚡ Fix via engine
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        assignments.map((a) => (
-                          <button
-                            key={a.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (a.staff) onStaffClick(a.staff);
-                            }}
-                            className="flex items-center gap-1.5 px-2 py-1 bg-white border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors text-xs"
-                          >
-                            <span className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold text-[10px]">
-                              {a.staff?.name?.charAt(0) || '?'}
-                            </span>
-                            <span className="font-medium text-gray-800">{a.staff?.name || 'Unknown'}</span>
-                            {(a.staff as Staff & { consecutive_days?: number })?.consecutive_days !== undefined &&
-                              ((a.staff as Staff & { consecutive_days?: number })?.consecutive_days ?? 0) >= 7 && (
-                              <span className="text-red-500" title="7th consecutive day!">⚠️</span>
-                            )}
-                          </button>
-                        ))
-                      )}
-                    </div>
-
-                    {/* Status */}
-                    <span className={`badge capitalize ${statusBadge[slot.status] || 'badge-gray'}`}>
-                      {slot.status}
-                    </span>
-
-                    {/* Consecutive day warning */}
-                    {hasConsecutiveWarning && (
-                      <span className="badge-red badge text-xs font-semibold animate-pulse">
-                        7-day alert
-                      </span>
-                    )}
-
-                    {/* Expand chevron */}
-                    <svg
-                      className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                      fill="none" viewBox="0 0 24 24" stroke="currentColor"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    <svg className="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                     </svg>
-                  </div>
-
-                  {/* Expanded detail */}
-                  {isExpanded && (
-                    <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                        <div>
-                          <p className="text-xs text-gray-500 mb-1">Slot ID</p>
-                          <p className="font-mono text-xs text-gray-700">{slot.id}</p>
+                    {hasAssignment ? 'Swap Staff' : 'Assign Staff'}
+                  </button>
+                )}
+              </div>
+              {hasAssignment ? (
+                (expandedSlotData.assignments ?? []).map((a) => {
+                  const violates =
+                    blockSpanForSlot(expandedSlotData) === 2 && a.staff?.employment_type === 'part_time';
+                  return (
+                    <div
+                      key={a.id}
+                      className={`flex items-center justify-between bg-white rounded-lg px-3 py-2 border ${
+                        violates ? 'border-red-300' : 'border-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold text-xs">
+                          {a.staff?.name?.charAt(0) || '?'}
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500 mb-1">Date</p>
-                          <p className="font-medium text-gray-800">{slot.shift_date}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500 mb-1">Assigned Staff</p>
-                          <p className="font-medium text-gray-800">{assignments.length} / {assignments.length || 1}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500 mb-1">Job Type</p>
-                          <p className="font-medium text-gray-800">{slot.job_type}</p>
+                          <p
+                            className="text-sm font-medium text-blue-600 hover:underline cursor-pointer"
+                            onClick={() => a.staff && onStaffClick(a.staff)}
+                          >
+                            {a.staff?.name}
+                          </p>
+                          <p className="text-xs text-gray-500 capitalize">
+                            {a.staff?.role}
+                            {a.staff?.employment_type === 'part_time' ? ' · Part-time' : ''}
+                          </p>
                         </div>
                       </div>
-
-                      {assignments.length > 0 && (
-                        <div className="mt-3 space-y-2">
-                          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Staff Details</p>
-                          {assignments.map((a) => (
-                            <div
-                              key={a.id}
-                              className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-100"
-                            >
-                              <div className="flex items-center gap-2">
-                                <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold text-xs">
-                                  {a.staff?.name?.charAt(0) || '?'}
-                                </div>
-                                <div>
-                                  <p
-                                    className="text-sm font-medium text-blue-600 hover:underline cursor-pointer"
-                                    onClick={() => a.staff && onStaffClick(a.staff)}
-                                  >
-                                    {a.staff?.name}
-                                  </p>
-                                  <p className="text-xs text-gray-500 capitalize">{a.staff?.role}</p>
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <span className={`badge capitalize text-xs ${
-                                  a.status === 'confirmed' ? 'badge-green' :
-                                  a.status === 'dropped' ? 'badge-red' :
-                                  a.status === 'swapped' ? 'badge-yellow' : 'badge-blue'
-                                }`}>
-                                  {a.status}
-                                </span>
-                                {a.swap_reason && (
-                                  <p className="text-xs text-gray-400 mt-0.5">{a.swap_reason}</p>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {onInspectEngine && (
-                        <div className="mt-3 pt-3 border-t border-gray-100">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onInspectEngine(slot);
-                            }}
-                            className="btn-secondary btn-sm text-xs"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                            </svg>
-                            Engine Decision — why this crew?
-                          </button>
-                        </div>
-                      )}
+                      <div className="text-right">
+                        {violates && (
+                          <span className="text-[10px] text-red-500 font-medium mb-1 block">
+                            Part-timer on 12h shift
+                          </span>
+                        )}
+                        <span className={`badge capitalize text-xs ${
+                          a.status === 'confirmed' ? 'badge-green' :
+                          a.status === 'dropped' ? 'badge-red' :
+                          a.status === 'swapped' ? 'badge-yellow' : 'badge-blue'
+                        }`}>
+                          {a.status}
+                        </span>
+                        {a.swap_reason && (
+                          <p className="text-xs text-gray-400 mt-0.5">{a.swap_reason}</p>
+                        )}
+                      </div>
                     </div>
-                  )}
+                  );
+                })
+              ) : !isReadOnly && onSlotSwap ? (
+                <div className="bg-white rounded-lg border border-dashed border-gray-200 px-3 py-4 text-center">
+                  <p className="text-sm text-gray-400 mb-2">No staff assigned</p>
+                  <button
+                    onClick={() => onSlotSwap(expandedSlotData.id, expandedSlotData.required_role === 'driver' ? 'driver' : 'attendant')}
+                    className="btn-primary btn-sm"
+                  >
+                    Assign Staff
+                  </button>
                 </div>
-              );
-            })}
+              ) : (
+                <div className="bg-white rounded-lg border border-dashed border-gray-200 px-3 py-4 text-center">
+                  <p className="text-sm text-gray-400">No staff assigned</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

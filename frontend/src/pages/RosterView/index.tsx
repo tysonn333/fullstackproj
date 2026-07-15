@@ -5,15 +5,15 @@ import { rosterApi } from '../../api/roster';
 import { flagsApi } from '../../api/flags';
 import { calendarApi } from '../../api/calendar';
 import { CrewGrid } from './CrewGrid';
-import { RosterTimeline } from './RosterTimeline';
+import { CalendarGrid } from './CalendarGrid';
+import { SlotSwapDialog } from './SlotSwapDialog';
 import { StaffDetail } from './StaffDetail';
-import { EngineDecisionModal } from './EngineDecisionModal';
 import { ImportJobsModal } from './ImportJobsModal';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useAuth } from '../../hooks/useAuth';
-import type { ShiftSlot, Staff, Flag, Roster, JobType, StaffRole } from '../../types';
+import type { ShiftSlot, Staff, Flag, Roster } from '../../types';
 
 // Singapore public holidays (simplified static list, incl. observed days —
 // extend each year; would come from an API in production)
@@ -42,13 +42,10 @@ export const RosterView: React.FC = () => {
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
-  const [inspectSlot, setInspectSlot] = useState<ShiftSlot | null>(null);
-  const [viewMode, setViewMode] = useState<'list' | 'timeline'>('list');
-  const [exporting, setExporting] = useState(false);
+  const [rosterDates, setRosterDates] = useState<Set<string>>(new Set());
+  const [swapSlots, setSwapSlots] = useState<{ slotId: string; role: 'driver' | 'attendant' } | null>(null);
   const [showImportJobs, setShowImportJobs] = useState(false);
-  // UC-001 A4 — filters grey out non-matching rows instead of removing them.
-  const [serviceFilter, setServiceFilter] = useState<JobType | ''>('');
-  const [roleFilter, setRoleFilter] = useState<StaffRole | ''>('');
+  const [exporting, setExporting] = useState(false);
 
   const { error: toastError, success: toastSuccess } = useToast();
   const { confirm } = useConfirm();
@@ -57,6 +54,20 @@ export const RosterView: React.FC = () => {
   const today = format(new Date(), 'yyyy-MM-dd');
   const isReadOnly = selectedDate < today;
   const isWeekendOrHoliday = isWeekend(parseISO(selectedDate)) || SG_PUBLIC_HOLIDAYS.includes(selectedDate);
+
+  const refreshRosterDates = useCallback(async (date: string) => {
+    const d = parseISO(date);
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    const from = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const to = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    try {
+      setRosterDates(await rosterApi.getRosterDatesInRange(from, to));
+    } catch {
+      /* non-critical calendar decoration */
+    }
+  }, []);
 
   const loadRoster = useCallback(async (date: string) => {
     setLoading(true);
@@ -95,6 +106,7 @@ export const RosterView: React.FC = () => {
           (summary.flags_raised > 0 ? ` · ${summary.flags_raised} flag(s) raised` : '')
       );
       await loadRoster(selectedDate);
+      await refreshRosterDates(selectedDate);
     } catch (err: unknown) {
       // UC-002 A1: job list absent — offer the skeleton fallback.
       const resp = axios.isAxiosError(err)
@@ -119,7 +131,7 @@ export const RosterView: React.FC = () => {
     } finally {
       setGenerating(false);
     }
-  }, [selectedDate, loadRoster, toastSuccess, toastError, confirm]);
+  }, [selectedDate, loadRoster, refreshRosterDates, toastSuccess, toastError, confirm]);
 
   const handleGenerate = () => {
     if (roster) {
@@ -174,6 +186,26 @@ export const RosterView: React.FC = () => {
       setExporting(false);
     }
   };
+
+  const handleMonthChange = useCallback((year: number, month: number) => {
+    const from = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const to = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    rosterApi
+      .getRosterDatesInRange(from, to)
+      .then(setRosterDates)
+      .catch(() => { /* non-critical */ });
+  }, []);
+
+  const handleSlotSwap = useCallback((slotId: string, role: 'driver' | 'attendant') => {
+    setSwapSlots({ slotId, role });
+  }, []);
+  const handleSwapDone = useCallback(() => {
+    setSwapSlots(null);
+    loadRoster(selectedDate);
+  }, [loadRoster, selectedDate]);
+
+  const swapSlot = swapSlots ? slots.find((s) => s.id === swapSlots.slotId) ?? null : null;
 
   const handlePrevDay = () => setSelectedDate(format(subDays(parseISO(selectedDate), 1), 'yyyy-MM-dd'));
   const handleNextDay = () => setSelectedDate(format(addDays(parseISO(selectedDate), 1), 'yyyy-MM-dd'));
@@ -248,7 +280,7 @@ export const RosterView: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-900">Roster View</h1>
           <p className="text-gray-500 text-sm mt-0.5">UC-001 — Daily crew scheduling overview</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {isWeekendOrHoliday && (
             <span className="badge-yellow badge text-xs">Weekend / PH</span>
           )}
@@ -261,33 +293,6 @@ export const RosterView: React.FC = () => {
           {roster && !roster.published && !isReadOnly && (
             <span className="badge-blue badge text-xs">Draft</span>
           )}
-          {/* List / Timeline view toggle */}
-          <div className="flex items-center gap-0.5 p-0.5 bg-gray-100 rounded-lg">
-            <button
-              onClick={() => setViewMode('list')}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1 ${
-                viewMode === 'list' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'
-              }`}
-              title="List view"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-              List
-            </button>
-            <button
-              onClick={() => setViewMode('timeline')}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1 ${
-                viewMode === 'timeline' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'
-              }`}
-              title="Timeline view — align irregular shifts on a shared time axis"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12M8 12h12M8 17h8M4 7h.01M4 12h.01M4 17h.01" />
-              </svg>
-              Timeline
-            </button>
-          </div>
           <button
             onClick={() => loadRoster(selectedDate)}
             className="btn-secondary btn-sm"
@@ -355,13 +360,10 @@ export const RosterView: React.FC = () => {
         </div>
       </div>
 
-      {/* Date Navigator */}
-      <div className="card mb-5">
+      {/* Date header + quick nav */}
+      <div className="card mb-4">
         <div className="flex items-center justify-between px-4 py-3">
-          <button
-            onClick={handlePrevDay}
-            className="btn-secondary btn-sm"
-          >
+          <button onClick={handlePrevDay} className="btn-secondary btn-sm">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
@@ -377,133 +379,96 @@ export const RosterView: React.FC = () => {
                 <span className="text-xs text-blue-600 font-medium">Today</span>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="input text-sm py-1.5 w-40"
-              />
-              {selectedDate !== today && (
-                <button onClick={handleToday} className="btn-secondary btn-sm">
-                  Today
-                </button>
-              )}
-            </div>
+            {selectedDate !== today && (
+              <button onClick={handleToday} className="btn-secondary btn-sm">
+                Today
+              </button>
+            )}
           </div>
 
-          <button
-            onClick={handleNextDay}
-            className="btn-secondary btn-sm"
-          >
+          <button onClick={handleNextDay} className="btn-secondary btn-sm">
             Next
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           </button>
         </div>
-
-        {/* Stats bar */}
-        <div className="px-4 pb-3 flex items-center gap-6 flex-wrap">
-          <div className="flex items-center gap-1.5 text-sm">
-            <span className="w-2.5 h-2.5 bg-green-500 rounded-full" />
-            <span className="text-gray-600">Active: <strong className="text-gray-900">{slots.filter(s => s.status === 'active').length}</strong></span>
-          </div>
-          <div className="flex items-center gap-1.5 text-sm">
-            <span className="w-2.5 h-2.5 bg-sky-500 rounded-full" />
-            <span className="text-gray-600">Scheduled: <strong className="text-gray-900">{slots.filter(s => s.status === 'scheduled').length}</strong></span>
-          </div>
-          <div className="flex items-center gap-1.5 text-sm">
-            <span className="w-2.5 h-2.5 bg-amber-500 rounded-full" />
-            <span className="text-gray-600">Unfilled: <strong className="text-gray-900">{slots.filter(s => s.status === 'unfilled').length}</strong></span>
-          </div>
-          <div className="flex items-center gap-1.5 text-sm">
-            <span className="w-2.5 h-2.5 bg-gray-400 rounded-full" />
-            <span className="text-gray-600">Total slots: <strong className="text-gray-900">{slots.length}</strong></span>
-          </div>
-          {activeFlags.length > 0 && (
-            <div className="flex items-center gap-1.5 text-sm">
-              <span className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
-              <span className="text-red-700">Exceptions: <strong>{activeFlags.length}</strong></span>
-            </div>
-          )}
-
-          {/* UC-001 A4 — filter by vehicle service type / role; non-matching
-              rows are greyed out, not removed, so the full picture remains. */}
-          <div className="ml-auto flex items-center gap-2">
-            <select
-              value={serviceFilter}
-              onChange={(e) => setServiceFilter(e.target.value as JobType | '')}
-              className="input text-xs py-1 w-32"
-              title="Filter by service type"
-            >
-              <option value="">All services</option>
-              <option value="MTS">MTS only</option>
-              <option value="EAS">EAS only</option>
-            </select>
-            <select
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value as StaffRole | '')}
-              className="input text-xs py-1 w-36"
-              title="Filter by crew role"
-            >
-              <option value="">All roles</option>
-              <option value="driver">Drivers only</option>
-              <option value="medic">Medics only</option>
-              <option value="emt">EMTs only</option>
-              <option value="paramedic">Paramedics only</option>
-            </select>
-            {(serviceFilter || roleFilter) && (
-              <button
-                onClick={() => { setServiceFilter(''); setRoleFilter(''); }}
-                className="btn-secondary btn-sm text-xs"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
       </div>
 
-      {/* Content */}
-      {loading ? (
-        <PageLoader label="Loading roster..." />
-      ) : error ? (
-        <div className="card p-8 text-center">
-          <svg className="w-12 h-12 mx-auto mb-3 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <p className="text-red-600 font-medium">{error}</p>
-          <button onClick={() => loadRoster(selectedDate)} className="btn-secondary btn-sm mt-3">
-            Try again
-          </button>
+      {/* Calendar + Main content */}
+      <div className="flex gap-4 items-start">
+        {/* Calendar sidebar */}
+        <div className="w-64 flex-shrink-0">
+          <CalendarGrid
+            selectedDate={selectedDate}
+            onDateSelect={setSelectedDate}
+            onMonthChange={handleMonthChange}
+            rosterDates={rosterDates}
+          />
         </div>
-      ) : viewMode === 'timeline' ? (
-        <div className="flex gap-4 items-start">
-          <div className="flex-1 min-w-0 space-y-3">
-            {isWeekendOrHoliday && (
-              <div className="px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-                Weekend / Public Holiday schedule
+
+        {/* Main content */}
+        <div className="flex-1 min-w-0">
+          {/* Stats bar */}
+          <div className="card mb-4">
+            <div className="px-4 py-3 flex items-center gap-6 flex-wrap">
+              {!roster && !loading && !error && (
+                <div className="flex items-center gap-1.5 text-sm text-gray-500">
+                  No roster for this date
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="w-2.5 h-2.5 bg-green-500 rounded-full" />
+                <span className="text-gray-600">Active: <strong className="text-gray-900">{slots.filter(s => s.status === 'active').length}</strong></span>
               </div>
-            )}
-            <RosterTimeline slots={slots} onStaffClick={setSelectedStaff} />
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="w-2.5 h-2.5 bg-sky-500 rounded-full" />
+                <span className="text-gray-600">Scheduled: <strong className="text-gray-900">{slots.filter(s => s.status === 'scheduled').length}</strong></span>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="w-2.5 h-2.5 bg-amber-500 rounded-full" />
+                <span className="text-gray-600">Unfilled: <strong className="text-gray-900">{slots.filter(s => s.status === 'unfilled').length}</strong></span>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="w-2.5 h-2.5 bg-gray-400 rounded-full" />
+                <span className="text-gray-600">Total slots: <strong className="text-gray-900">{slots.length}</strong></span>
+              </div>
+              {activeFlags.length > 0 && (
+                <div className="flex items-center gap-1.5 text-sm">
+                  <span className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
+                  <span className="text-red-700">Exceptions: <strong>{activeFlags.length}</strong></span>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="w-72 flex-shrink-0">{exceptionsPanel}</div>
+
+          {/* Content */}
+          {loading ? (
+            <PageLoader label="Loading roster..." />
+          ) : error ? (
+            <div className="card p-8 text-center">
+              <svg className="w-12 h-12 mx-auto mb-3 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="text-red-600 font-medium">{error}</p>
+              <button onClick={() => loadRoster(selectedDate)} className="btn-secondary btn-sm mt-3">
+                Try again
+              </button>
+            </div>
+          ) : (
+            <CrewGrid
+              slots={slots}
+              date={selectedDate}
+              isReadOnly={isReadOnly}
+              isWeekendOrHoliday={isWeekendOrHoliday}
+              onStaffClick={setSelectedStaff}
+              onSlotSwap={isAdmin && !isReadOnly ? handleSlotSwap : undefined}
+              exceptionsPanel={exceptionsPanel}
+            />
+          )}
         </div>
-      ) : (
-        <CrewGrid
-          slots={slots}
-          date={selectedDate}
-          isReadOnly={isReadOnly}
-          isWeekendOrHoliday={isWeekendOrHoliday}
-          onStaffClick={setSelectedStaff}
-          exceptionsPanel={exceptionsPanel}
-          serviceFilter={serviceFilter}
-          roleFilter={roleFilter}
-          onInspectEngine={setInspectSlot}
-        />
-      )}
+      </div>
 
       {/* UC-002 job feed import */}
       {showImportJobs && (
@@ -514,20 +479,21 @@ export const RosterView: React.FC = () => {
         />
       )}
 
+      {/* Slot assign / swap dialog (UC-005 ranking) */}
+      {swapSlot && swapSlots && (
+        <SlotSwapDialog
+          slot={swapSlot}
+          role={swapSlots.role}
+          onClose={() => setSwapSlots(null)}
+          onSwap={handleSwapDone}
+        />
+      )}
+
       {/* Staff detail modal */}
       {selectedStaff && (
         <StaffDetail
           staff={selectedStaff}
           onClose={() => setSelectedStaff(null)}
-        />
-      )}
-
-      {/* Engine Decision inspector (UC-004 filter + UC-005 ranking) */}
-      {inspectSlot && (
-        <EngineDecisionModal
-          slot={inspectSlot}
-          onClose={() => setInspectSlot(null)}
-          onAssigned={() => loadRoster(selectedDate)}
         />
       )}
     </div>

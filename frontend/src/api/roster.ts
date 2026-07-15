@@ -1,5 +1,6 @@
 import apiClient from './client';
 import type { Roster, ShiftSlot, Assignment, Staff, Ambulance, JobType } from '../types';
+import type { ScoreBreakdown } from './engine';
 
 // ─── Row types ────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,33 @@ interface ReplacementCandidate {
   score: number;
   reason: string;
   proximity_km?: number;
+}
+
+// Full ranked candidate from GET /slots/:id/ranked (UC-005), including Guan
+// Hee's 6-component score breakdown — powers the RosterView ranking modal.
+interface RankedRow {
+  staff_id: number;
+  full_name: string;
+  role: Staff['role'];
+  employment_type?: Staff['employment_type'];
+  home_postal?: string | null;
+  score: number;
+  score_breakdown: ScoreBreakdown;
+  rest_hours: number;
+  late_shift_count: number;
+  proximity_km: number;
+  consecutive_days_flag: boolean;
+  consecutive_days_count: number;
+}
+
+export interface SlotCandidate {
+  staff: Staff;
+  score: number;
+  score_breakdown: ScoreBreakdown;
+  rest_hours: number;
+  late_shift_count: number;
+  proximity_km: number;
+  reason: string;
 }
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
@@ -192,6 +220,31 @@ function mapCandidate(c: RankedCandidateRow): ReplacementCandidate {
   };
 }
 
+function mapSlotCandidate(c: RankedRow): SlotCandidate {
+  return {
+    staff: {
+      id: String(c.staff_id),
+      name: c.full_name,
+      phone: '',
+      email: '',
+      role: c.role,
+      employment_type: c.employment_type ?? 'full_time',
+      home_postal: c.home_postal ?? '',
+      status: 'active',
+      created_at: '',
+      updated_at: '',
+    },
+    score: c.score,
+    score_breakdown: c.score_breakdown,
+    rest_hours: c.rest_hours,
+    late_shift_count: c.late_shift_count,
+    proximity_km: c.proximity_km,
+    reason:
+      `${c.rest_hours}h rest · ${c.proximity_km}km from base · ${c.late_shift_count} late shift(s)` +
+      (c.consecutive_days_flag ? ` · ${c.consecutive_days_count} consecutive days` : ''),
+  };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function getRosterByDate(date: string): Promise<RosterRow | null> {
@@ -293,5 +346,39 @@ export const rosterApi = {
       }
     );
     return mapAssignment(data.data, Number(slotId));
+  },
+
+  /** Set of dates within [from, to] that have a roster — drives the calendar. */
+  getRosterDatesInRange: async (from: string, to: string): Promise<Set<string>> => {
+    const { data } = await apiClient.get<{ data: RosterRow[] }>(
+      `/api/v1/roster?from=${from}&to=${to}`
+    );
+    return new Set((data.data ?? []).map((r) => r.roster_date));
+  },
+
+  /**
+   * Ranked eligible candidates for a slot WITH the full 6-component score
+   * breakdown (UC-005), for the RosterView assign/swap ranking modal.
+   */
+  getSlotCandidates: async (slotId: string): Promise<SlotCandidate[]> => {
+    const { data } = await apiClient.get<{ ranked_candidates: RankedRow[] }>(
+      `/api/v1/slots/${slotId}/ranked`
+    );
+    return (data.ranked_candidates ?? []).map(mapSlotCandidate);
+  },
+
+  /**
+   * Assign a staff member to a slot from the RosterView. Works on DRAFT rosters
+   * (unlike the published-only reassign flow): if the slot already has an active
+   * occupant we swap via PUT /assignments/:id, otherwise we fill it via
+   * POST /slots/:id/assign. Both are admin-gated on the backend.
+   */
+  assignToSlot: async (slot: ShiftSlot, staffId: string): Promise<void> => {
+    const current = slot.assignments && slot.assignments.length > 0 ? slot.assignments[0] : null;
+    if (current) {
+      await apiClient.put(`/api/v1/assignments/${current.id}`, { staff_id: Number(staffId) });
+    } else {
+      await apiClient.post(`/api/v1/slots/${slot.id}/assign`, { staff_id: Number(staffId) });
+    }
   },
 };
