@@ -210,6 +210,15 @@ email (or set `profiles.staff_id` manually).
 > `admin`/`ops_director` roles, run
 > `docs/migrations/2026-07-09-roles-and-staff-link.sql` (edit the admin email
 > inside it first) to switch to the `admin`/`employee` model and add the staff link.
+>
+> **Pointed the app at a different / parallel database?** (e.g. an older
+> `admin`/`ops_director` database with no `profiles.staff_id` and no
+> `staff_preferences` table — logins work but writes 403/500 and generation
+> assigns nobody.) Run the single, idempotent
+> **`docs/migrations/2026-07-15-align-database.sql`** in the SQL Editor once. It
+> bundles the role/staff-link, `staff_preferences`, and certification
+> backfill/renewal migrations so the current backend runs cleanly against that
+> database. Edit the admin email inside it if yours isn't `admin@efar.sg`.
 
 ---
 
