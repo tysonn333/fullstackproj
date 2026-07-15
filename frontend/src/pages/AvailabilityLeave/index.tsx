@@ -39,7 +39,8 @@ export const AvailabilityLeave: React.FC = () => {
   const [loadingLeave, setLoadingLeave] = useState(false);
 
   const { error: toastError } = useToast();
-  const { isAdmin, staffId: myStaffId } = useAuth();
+  const { isAdmin, staffId: myStaffId, user } = useAuth();
+  const myEmail = user?.email ?? null;
 
   // Load staff. Employees can only act on their own record, so lock the
   // selection to themselves; admins get the full list and pick anyone.
@@ -50,16 +51,25 @@ export const AvailabilityLeave: React.FC = () => {
           setStaffList(r.data);
           if (r.data.length > 0) setSelectedStaffId(r.data[0].id);
         } else {
-          const mine = myStaffId != null
+          // Primary: the staff link resolved by the backend (/auth/me).
+          // Fallback: match the login email against the staff list directly,
+          // so an employee still sees THEIR record even if the profile link
+          // hasn't resolved yet (e.g. database without profiles.staff_id).
+          let mine = myStaffId != null
             ? r.data.filter((s) => s.id === String(myStaffId))
             : [];
+          if (mine.length === 0 && myEmail) {
+            mine = r.data.filter(
+              (s) => s.email && s.email.toLowerCase() === myEmail.toLowerCase()
+            );
+          }
           setStaffList(mine);
           if (mine.length > 0) setSelectedStaffId(mine[0].id);
         }
       })
       .catch(() => toastError('Failed to load staff list'))
       .finally(() => setLoadingStaff(false));
-  }, [toastError, isAdmin, myStaffId]);
+  }, [toastError, isAdmin, myStaffId, myEmail]);
 
   // Load calendar data when staff / month changes
   const loadCalendar = useCallback(async () => {
@@ -120,6 +130,16 @@ export const AvailabilityLeave: React.FC = () => {
   };
 
   const selectedStaff = staffList.find((s) => s.id === selectedStaffId);
+
+  // Employee whose login matches no staff record — tell them exactly what's
+  // wrong instead of showing empty lists.
+  const unlinkedNotice = !isAdmin && !loadingStaff && staffList.length === 0 && (
+    <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+      Your login {myEmail ? <strong>{myEmail}</strong> : ''} isn&apos;t linked to a staff record yet.
+      Ask an admin to add you in Staff Management with this exact email — the link happens
+      automatically on your next sign-in.
+    </div>
+  );
 
   const handleLeaveCreated = (req: LeaveRequest) => {
     setLeaveRequests((prev) => [req, ...prev]);
@@ -189,6 +209,8 @@ export const AvailabilityLeave: React.FC = () => {
           </button>
         ))}
       </div>
+
+      {unlinkedNotice}
 
       {/* Calendar Tab */}
       {tab === 'calendar' && (

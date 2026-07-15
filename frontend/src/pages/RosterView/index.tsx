@@ -290,9 +290,6 @@ export const RosterView: React.FC = () => {
           {roster?.published && (
             <span className="badge-green badge text-xs">Published</span>
           )}
-          {roster && !roster.published && !isReadOnly && (
-            <span className="badge-blue badge text-xs">Draft</span>
-          )}
           <button
             onClick={() => loadRoster(selectedDate)}
             className="btn-secondary btn-sm"

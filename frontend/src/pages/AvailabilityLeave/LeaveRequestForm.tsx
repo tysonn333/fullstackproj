@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { availabilityApi } from '../../api/availability';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
@@ -41,6 +41,14 @@ export const LeaveRequestForm: React.FC<LeaveRequestFormProps> = ({
   const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>({});
   const [loading, setLoading] = useState(false);
   const { success, error: toastError } = useToast();
+
+  // Employees get a single-person list (themselves) — pre-select it so the
+  // dropdown never sits empty. Also applies once an async staff load lands.
+  useEffect(() => {
+    if (staffList.length === 1) {
+      setForm((prev) => (prev.staff_id === staffList[0].id ? prev : { ...prev, staff_id: staffList[0].id }));
+    }
+  }, [staffList]);
 
   const validate = (): boolean => {
     const errs: Partial<Record<keyof FormData, string>> = {};

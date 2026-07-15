@@ -94,22 +94,26 @@ export async function authenticate(
 
     let staffId: number | null = profile?.staff_id ?? null;
 
-    // Link the login to a staff record by matching email, and PERSIST it so
-    // ensureSelfOrAdmin (and subsequent requests) recognise the ownership.
-    // Skip entirely when the staff_id column doesn't exist yet.
-    if (hasStaffIdColumn && staffId == null && data.user.email) {
+    // Link the login to a staff record by matching email (case-insensitive).
+    // This lookup ALWAYS runs when unlinked — employees need their staff link
+    // for self-service (availability/leave) even on a database whose profiles
+    // table has no staff_id column yet. Only the PERSIST step depends on the
+    // column existing; without it we simply resolve the link per-request.
+    if (staffId == null && data.user.email) {
       const { data: matchingStaff } = await supabaseAdmin
         .from('staff')
         .select('staff_id')
-        .eq('email', data.user.email)
+        .ilike('email', data.user.email)
         .maybeSingle();
 
       if (matchingStaff) {
         staffId = matchingStaff.staff_id;
-        await supabaseAdmin
-          .from('profiles')
-          .update({ staff_id: staffId })
-          .eq('id', data.user.id);
+        if (hasStaffIdColumn) {
+          await supabaseAdmin
+            .from('profiles')
+            .update({ staff_id: staffId })
+            .eq('id', data.user.id);
+        }
       }
     }
 
