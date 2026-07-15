@@ -20,7 +20,9 @@ interface CandidateListProps {
 }
 
 const roleColors: Record<string, string> = {
-  driver: 'bg-blue-100 text-blue-700',
+  // Driver → sky so it stays visually distinct from paramedic (which now maps
+  // to brand red under the re-theme).
+  driver: 'bg-sky-100 text-sky-700',
   medic: 'bg-green-100 text-green-700',
   emt: 'bg-purple-100 text-purple-700',
   paramedic: 'bg-orange-100 text-orange-700',
@@ -83,7 +85,7 @@ export const CandidateList: React.FC<CandidateListProps> = ({
               {/* Rank badge */}
               <div className={`
                 flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white
-                ${index === 0 ? 'bg-green-500' : index === 1 ? 'bg-blue-500' : index === 2 ? 'bg-purple-500' : 'bg-gray-400'}
+                ${index === 0 ? 'bg-green-500' : index === 1 ? 'bg-sky-500' : index === 2 ? 'bg-purple-500' : 'bg-gray-400'}
               `}>
                 {index + 1}
               </div>

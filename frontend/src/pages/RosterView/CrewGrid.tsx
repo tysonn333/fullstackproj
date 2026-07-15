@@ -11,10 +11,13 @@ interface CrewGridProps {
   /** UC-001 A4 — non-matching rows are greyed out, never removed. */
   serviceFilter?: JobType | '';
   roleFilter?: StaffRole | '';
+  /** Opens the Engine Decision inspector (UC-004/005) for a slot. */
+  onInspectEngine?: (slot: ShiftSlot) => void;
 }
 
 const jobTypeBadge: Record<string, string> = {
-  MTS: 'bg-blue-100 text-blue-700 border border-blue-200',
+  // MTS = informational data → sky (not red, which is the brand/critical hue).
+  MTS: 'bg-sky-100 text-sky-700 border border-sky-200',
   EAS: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
 };
 
@@ -50,6 +53,7 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
   exceptionsPanel,
   serviceFilter = '',
   roleFilter = '',
+  onInspectEngine,
 }) => {
   const [expandedSlot, setExpandedSlot] = useState<string | null>(null);
 
@@ -163,9 +167,23 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                     {/* Crew names */}
                     <div className="flex-1 flex items-center gap-2 flex-wrap">
                       {assignments.length === 0 ? (
-                        <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                          Unfilled
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                            Unfilled
+                          </span>
+                          {onInspectEngine && !isReadOnly && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onInspectEngine(slot);
+                              }}
+                              className="text-xs font-medium text-white bg-red-600 hover:bg-red-700 px-2 py-0.5 rounded-full transition-colors"
+                              title="Open the Engine Decision inspector and assign a crew member"
+                            >
+                              ⚡ Fix via engine
+                            </button>
+                          )}
+                        </div>
                       ) : (
                         assignments.map((a) => (
                           <button
@@ -268,6 +286,23 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                               </div>
                             </div>
                           ))}
+                        </div>
+                      )}
+
+                      {onInspectEngine && (
+                        <div className="mt-3 pt-3 border-t border-gray-100">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onInspectEngine(slot);
+                            }}
+                            className="btn-secondary btn-sm text-xs"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                            Engine Decision — why this crew?
+                          </button>
                         </div>
                       )}
                     </div>

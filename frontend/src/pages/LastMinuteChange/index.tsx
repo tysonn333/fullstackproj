@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { format, addDays } from 'date-fns';
 import { rosterApi } from '../../api/roster';
@@ -42,7 +43,12 @@ function calcHours(start: string, end: string): number {
 }
 
 export const LastMinuteChange: React.FC = () => {
-  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  // Deep-link support: a "Find Replacement" flag button lands here with ?date=.
+  const [searchParams] = useSearchParams();
+  const dateParam = searchParams.get('date');
+  const initialDate =
+    dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : format(new Date(), 'yyyy-MM-dd');
+  const [selectedDate, setSelectedDate] = useState(initialDate);
   const [slots, setSlots] = useState<ShiftSlot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(true);
   const [selectedSlot, setSelectedSlot] = useState<ShiftSlot | null>(null);

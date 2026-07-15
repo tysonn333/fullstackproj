@@ -55,7 +55,8 @@ export const StaffDetail: React.FC<StaffDetailProps> = ({ staff, onClose }) => {
   }, [staff.id]);
 
   const roleColor: Record<string, string> = {
-    driver: 'bg-blue-100 text-blue-700',
+    // Driver → sky so it doesn't collide with paramedic red under the re-theme.
+    driver: 'bg-sky-100 text-sky-700',
     medic: 'bg-green-100 text-green-700',
     emt: 'bg-purple-100 text-purple-700',
     paramedic: 'bg-red-100 text-red-700',

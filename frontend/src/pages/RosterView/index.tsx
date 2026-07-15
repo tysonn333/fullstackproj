@@ -7,6 +7,7 @@ import { calendarApi } from '../../api/calendar';
 import { CrewGrid } from './CrewGrid';
 import { RosterTimeline } from './RosterTimeline';
 import { StaffDetail } from './StaffDetail';
+import { EngineDecisionModal } from './EngineDecisionModal';
 import { ImportJobsModal } from './ImportJobsModal';
 import { PageLoader } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
@@ -41,6 +42,7 @@ export const RosterView: React.FC = () => {
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
+  const [inspectSlot, setInspectSlot] = useState<ShiftSlot | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'timeline'>('list');
   const [exporting, setExporting] = useState(false);
   const [showImportJobs, setShowImportJobs] = useState(false);
@@ -408,7 +410,7 @@ export const RosterView: React.FC = () => {
             <span className="text-gray-600">Active: <strong className="text-gray-900">{slots.filter(s => s.status === 'active').length}</strong></span>
           </div>
           <div className="flex items-center gap-1.5 text-sm">
-            <span className="w-2.5 h-2.5 bg-blue-500 rounded-full" />
+            <span className="w-2.5 h-2.5 bg-sky-500 rounded-full" />
             <span className="text-gray-600">Scheduled: <strong className="text-gray-900">{slots.filter(s => s.status === 'scheduled').length}</strong></span>
           </div>
           <div className="flex items-center gap-1.5 text-sm">
@@ -499,6 +501,7 @@ export const RosterView: React.FC = () => {
           exceptionsPanel={exceptionsPanel}
           serviceFilter={serviceFilter}
           roleFilter={roleFilter}
+          onInspectEngine={setInspectSlot}
         />
       )}
 
@@ -516,6 +519,15 @@ export const RosterView: React.FC = () => {
         <StaffDetail
           staff={selectedStaff}
           onClose={() => setSelectedStaff(null)}
+        />
+      )}
+
+      {/* Engine Decision inspector (UC-004 filter + UC-005 ranking) */}
+      {inspectSlot && (
+        <EngineDecisionModal
+          slot={inspectSlot}
+          onClose={() => setInspectSlot(null)}
+          onAssigned={() => loadRoster(selectedDate)}
         />
       )}
     </div>

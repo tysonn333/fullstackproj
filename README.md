@@ -170,6 +170,11 @@ This creates all tables, constraints, and indexes.
 > `staff_preferences` table used by the UC-005 preference score. The ranking
 > engine tolerates its absence, but the preference component only varies once
 > the table exists and is populated (the seed script fills it in).
+>
+> **Roster generation assigns nobody?** Your certifications are probably expired
+> or missing — UC-004 Filter 5 requires a real, unexpired cert. Run
+> `docs/migrations/2026-07-14-renew-certifications.sql`. (Staff created through
+> the UI now get role-implied certifications automatically.)
 
 ### 2. Seed initial data (optional)
 

@@ -61,36 +61,19 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
 /**
  * GET /api/v1/auth/me
  * Returns the current user's profile, role, and linked staff record.
- * If the profile isn't linked to a staff row yet, tries to auto-link by
- * matching the login email to a staff email (so self-service works without
- * manual database edits).
+ * The authenticate middleware already self-heals the profile row and links the
+ * staff record by email (persisting req.user.staffId), so this route simply
+ * trusts req.user and reads the display name + staff row.
  */
 router.get('/me', authenticate, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles')
-      .select('name, role, staff_id')
+      .select('name, role')
       .eq('id', req.user!.id)
-      .single();
+      .maybeSingle();
 
-    let staffId: number | null = profile?.staff_id ?? null;
-
-    // Auto-link by email if not linked yet.
-    if (staffId == null && req.user!.email) {
-      const { data: matchingStaff } = await supabaseAdmin
-        .from('staff')
-        .select('staff_id')
-        .eq('email', req.user!.email)
-        .maybeSingle();
-
-      if (matchingStaff) {
-        staffId = matchingStaff.staff_id;
-        await supabaseAdmin
-          .from('profiles')
-          .update({ staff_id: staffId })
-          .eq('id', req.user!.id);
-      }
-    }
+    const staffId = req.user!.staffId ?? null;
 
     let staff = null;
     if (staffId != null) {
@@ -106,7 +89,7 @@ router.get('/me', authenticate, async (req: AuthenticatedRequest, res: Response,
       id: req.user!.id,
       email: req.user!.email,
       name: profile?.name ?? null,
-      role: profile?.role ?? 'employee',
+      role: req.user!.role ?? 'employee',
       staff_id: staffId,
       staff,
     });

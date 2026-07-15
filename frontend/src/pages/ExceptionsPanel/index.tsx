@@ -200,7 +200,7 @@ export const ExceptionsPanel: React.FC = () => {
           { label: 'Total Active', value: activeFlags.length, color: 'text-gray-900', bg: 'bg-white' },
           { label: 'Critical', value: criticalCount, color: 'text-red-600', bg: criticalCount > 0 ? 'bg-red-50' : 'bg-white' },
           { label: 'Warning', value: warningCount, color: 'text-amber-600', bg: warningCount > 0 ? 'bg-amber-50' : 'bg-white' },
-          { label: 'Info', value: infoCount, color: 'text-blue-600', bg: 'bg-white' },
+          { label: 'Info', value: infoCount, color: 'text-sky-600', bg: 'bg-white' },
         ].map((stat) => (
           <div key={stat.label} className={`card px-4 py-3 ${stat.bg}`}>
             <p className="text-xs text-gray-500">{stat.label}</p>

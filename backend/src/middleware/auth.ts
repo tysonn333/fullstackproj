@@ -36,17 +36,54 @@ export async function authenticate(
     // Fetch profile to get role + linked staff record.
     // Default to the least-privileged role ('employee') when no profile row
     // exists, so a missing/misconfigured profile can never grant admin rights.
-    const { data: profile } = await supabaseAdmin
+    let { data: profile } = await supabaseAdmin
       .from('profiles')
       .select('role, staff_id')
       .eq('id', data.user.id)
-      .single();
+      .maybeSingle();
+
+    // Self-heal a missing profile row. Previously the linking logic lived only
+    // in GET /auth/me, but its UPDATE hit ZERO rows when the profile row didn't
+    // exist at all — so the UI showed the staff member's name while every write
+    // still returned 403 from ensureSelfOrAdmin (req.user.staffId stayed null).
+    // Creating the row here, and doing the email→staff link in the middleware,
+    // makes the link authoritative for every request.
+    if (!profile) {
+      const emailPrefix = data.user.email ? data.user.email.split('@')[0] : 'user';
+      const { data: created } = await supabaseAdmin
+        .from('profiles')
+        .insert({ id: data.user.id, name: emailPrefix, role: 'employee' })
+        .select('role, staff_id')
+        .single();
+      profile = created ?? { role: 'employee', staff_id: null };
+    }
+
+    const role = profile?.role ?? 'employee';
+    let staffId: number | null = profile?.staff_id ?? null;
+
+    // Link the login to a staff record by matching email, and PERSIST it so
+    // ensureSelfOrAdmin (and subsequent requests) recognise the ownership.
+    if (staffId == null && data.user.email) {
+      const { data: matchingStaff } = await supabaseAdmin
+        .from('staff')
+        .select('staff_id')
+        .eq('email', data.user.email)
+        .maybeSingle();
+
+      if (matchingStaff) {
+        staffId = matchingStaff.staff_id;
+        await supabaseAdmin
+          .from('profiles')
+          .update({ staff_id: staffId })
+          .eq('id', data.user.id);
+      }
+    }
 
     req.user = {
       id: data.user.id,
       email: data.user.email,
-      role: profile?.role ?? 'employee',
-      staffId: profile?.staff_id ?? null,
+      role,
+      staffId,
     };
     req.accessToken = token;
 

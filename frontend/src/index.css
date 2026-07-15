@@ -29,8 +29,10 @@
     @apply btn bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 focus:ring-blue-500;
   }
 
+  /* Outlined so destructive actions read as "careful" next to the bold red
+     primary buttons (which are now red too under the EFAR re-theme). */
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+    @apply btn bg-white text-red-700 border border-red-300 hover:bg-red-50 focus:ring-red-500;
   }
 
   .btn-success {
@@ -85,8 +87,9 @@
     @apply badge bg-amber-100 text-amber-700;
   }
 
+  /* "info" badge stays sky (not red) — red now means brand/critical. */
   .badge-blue {
-    @apply badge bg-blue-100 text-blue-700;
+    @apply badge bg-sky-100 text-sky-700;
   }
 
   .badge-green {
@@ -162,7 +165,7 @@
   }
 
   .severity-info {
-    @apply bg-blue-50 border-l-4 border-blue-400;
+    @apply bg-sky-50 border-l-4 border-sky-400;
   }
 }
 

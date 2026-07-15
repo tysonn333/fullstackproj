@@ -62,10 +62,10 @@ const toastConfig = {
   },
   info: {
     icon: <InfoIcon />,
-    bg: 'bg-blue-50 border-blue-200',
-    icon_color: 'text-blue-600',
-    title_color: 'text-blue-800',
-    msg_color: 'text-blue-700',
+    bg: 'bg-sky-50 border-sky-200',
+    icon_color: 'text-sky-600',
+    title_color: 'text-sky-800',
+    msg_color: 'text-sky-700',
   },
 };
 

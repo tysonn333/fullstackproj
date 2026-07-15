@@ -7,7 +7,8 @@ interface RosterTimelineProps {
 }
 
 const jobTypeBar: Record<string, string> = {
-  MTS: 'bg-blue-500/85 border-blue-600',
+  // MTS = informational data → sky (kept distinct from brand/critical red).
+  MTS: 'bg-sky-500/85 border-sky-600',
   EAS: 'bg-emerald-500/85 border-emerald-600',
 };
 
@@ -79,7 +80,7 @@ export const RosterTimeline: React.FC<RosterTimelineProps> = ({ slots, onStaffCl
       <div className="card-header">
         <h3 className="text-sm font-semibold text-gray-800">Shift Timeline</h3>
         <div className="flex items-center gap-3 text-xs text-gray-500">
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-blue-500/85" /> MTS</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-sky-500/85" /> MTS</span>
           <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-emerald-500/85" /> EAS</span>
           <span className="flex items-center gap-1"><span className="w-3 h-3 rounded border border-dashed border-amber-400 bg-amber-50" /> Unfilled</span>
         </div>

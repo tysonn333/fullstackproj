@@ -49,7 +49,7 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
   const [endDate, setEndDate] = useState(initialDate ?? today);
   const [choice, setChoice] = useState<AvailChoice>('available');
   const [saving, setSaving] = useState(false);
-  const { success, error: toastError } = useToast();
+  const { success, warning, error: toastError } = useToast();
 
   useEffect(() => {
     if (initialStaffId) setStaffId(initialStaffId);
@@ -94,11 +94,24 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
           })
         )
       );
-      success(
-        'Availability saved',
-        `${saved.length} day${saved.length === 1 ? '' : 's'} updated for the roster engine.`
-      );
-      onSaved?.(saved);
+      const records = saved.map((s) => s.availability);
+      const totalFlags = saved.reduce((sum, s) => sum + s.flagsRaised, 0);
+      if (totalFlags > 0) {
+        // Reduced availability stranded existing assignments — tell the user a
+        // coverage gap was created so they can arrange replacements.
+        warning(
+          'Saved — coverage gaps created!',
+          `${records.length} day${records.length === 1 ? '' : 's'} updated, but ${totalFlags} ` +
+            `assignment${totalFlags === 1 ? '' : 's'} now conflict with this availability. ` +
+            `${totalFlags} flag${totalFlags === 1 ? '' : 's'} raised — resolve them in the Exceptions panel.`
+        );
+      } else {
+        success(
+          'Availability saved',
+          `${records.length} day${records.length === 1 ? '' : 's'} updated for the roster engine.`
+        );
+      }
+      onSaved?.(records);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to save availability';
       toastError('Save failed', msg);

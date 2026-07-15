@@ -10,6 +10,40 @@ const router = Router();
 router.use(authenticate);
 
 /**
+ * Auto-provision the certifications a role implies (UC-007 → UC-004 Filter 5).
+ *
+ * Staff created through the UI had no certification rows at all, so the strict
+ * cert-expiry filter (UC-004 Filter 5) correctly blocked them from every shift
+ * and roster generation ended up assigning nobody. This seeds the role-implied
+ * certs — MTS for every role, plus EAS for drivers/paramedics — valid for two
+ * years from today.
+ *
+ * Uses ignoreDuplicates on the (staff_id, cert_name) unique key so an existing
+ * cert's expiry date is NEVER overwritten (a real, hand-managed expiry wins).
+ */
+async function ensureRoleCertifications(staffId: number, role: string): Promise<void> {
+  const today = new Date();
+  const issued = today.toISOString().split('T')[0];
+  const expiry = new Date(today);
+  expiry.setFullYear(expiry.getFullYear() + 2);
+  const expiryStr = expiry.toISOString().split('T')[0];
+
+  const certNames = ['MTS'];
+  if (role === 'driver' || role === 'paramedic') certNames.push('EAS');
+
+  const rows = certNames.map((cert_name) => ({
+    staff_id: staffId,
+    cert_name,
+    issued_date: issued,
+    expiry_date: expiryStr,
+  }));
+
+  await supabaseAdmin
+    .from('staff_certifications')
+    .upsert(rows, { onConflict: 'staff_id,cert_name', ignoreDuplicates: true });
+}
+
+/**
  * GET /api/v1/staff
  * Query params: role, status, employment_type, search (name/email)
  */
@@ -128,6 +162,10 @@ router.post('/', requireAdmin, async (req: AuthenticatedRequest, res: Response, 
       throw error;
     }
 
+    // Seed role-implied certifications so the new staff member is immediately
+    // eligible under UC-004 Filter 5 (otherwise generation assigns nobody).
+    await ensureRoleCertifications(data.staff_id, role);
+
     await logAudit({
       entity_type: 'staff',
       entity_id: data.staff_id,
@@ -191,6 +229,12 @@ router.put('/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response
     if (error || !data) {
       res.status(404).json({ error: 'Staff member not found' });
       return;
+    }
+
+    // A role change (or a role set on a staff member that lacked certs) implies
+    // new certifications — seed any that are missing, keeping existing expiries.
+    if (role !== undefined) {
+      await ensureRoleCertifications(staffId, role);
     }
 
     await logAudit({

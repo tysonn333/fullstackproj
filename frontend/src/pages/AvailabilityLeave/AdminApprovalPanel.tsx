@@ -37,7 +37,7 @@ export const AdminApprovalPanel: React.FC<AdminApprovalPanelProps> = ({
   onUpdate,
 }) => {
   const [actions, setActions] = useState<ActionState>({});
-  const { success, error: toastError } = useToast();
+  const { success, warning, error: toastError } = useToast();
 
   const startAction = (id: string, type: 'approve' | 'reject') => {
     setActions((prev) => ({
@@ -69,11 +69,29 @@ export const AdminApprovalPanel: React.FC<AdminApprovalPanelProps> = ({
     try {
       let updated: LeaveRequest;
       if (action.type === 'approve') {
-        updated = await availabilityApi.approveLeaveRequest(req.id, action.notes);
-        success(
-          'Leave approved',
-          `${req.staff?.name || 'Staff'}'s leave from ${format(parseISO(req.start_date), 'dd MMM')} has been approved.`
+        const { request, conflictsCount, flagsRaised } = await availabilityApi.approveLeaveRequest(
+          req.id,
+          action.notes
         );
+        updated = request;
+        const staffName = req.staff?.name || 'Staff';
+        if (conflictsCount > 0) {
+          // Approving stranded existing assignments — warn and point to the fix.
+          warning(
+            'Approved — coverage impact!',
+            `${staffName}'s leave was approved, but ${conflictsCount} existing ` +
+              `assignment${conflictsCount === 1 ? '' : 's'} now conflict` +
+              (flagsRaised > 0
+                ? ` and ${flagsRaised} flag${flagsRaised === 1 ? '' : 's'} were raised. `
+                : '. ') +
+              'Arrange replacements from the Exceptions panel.'
+          );
+        } else {
+          success(
+            'Leave approved',
+            `${staffName}'s leave from ${format(parseISO(req.start_date), 'dd MMM')} has been approved.`
+          );
+        }
       } else {
         updated = await availabilityApi.rejectLeaveRequest(req.id, action.notes);
         success('Leave rejected', `${req.staff?.name || 'Staff'}'s leave request has been rejected.`);

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { format, parseISO, isValid } from 'date-fns';
 import { flagsApi } from '../../api/flags';
 import { useToast } from '../../components/Toast';
@@ -30,10 +31,10 @@ const severityConfig = {
   },
   info: {
     badge: 'badge-blue',
-    border: 'border-l-blue-400',
-    bg: 'bg-blue-50',
+    border: 'border-l-sky-400',
+    bg: 'bg-sky-50',
     icon: 'ℹ️',
-    dot: 'bg-blue-400',
+    dot: 'bg-sky-400',
   },
 };
 
@@ -58,9 +59,17 @@ export const FlagCard: React.FC<FlagCardProps> = ({
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
   const { success, error: toastError } = useToast();
+  const navigate = useNavigate();
 
   const config = severityConfig[flag.severity];
   const isActive = flag.status === 'active';
+
+  // Staffing-gap flags can be resolved by finding a replacement — deep-link to
+  // the Last-Minute Changes flow pre-seeded with the affected date (UC-006).
+  const canFindReplacement =
+    isActive &&
+    (flag.flag_type === 'coverage_gap' || flag.flag_type === 'half_day_gap') &&
+    Boolean(flag.affected_date);
 
   const handleAction = async () => {
     if (!reason.trim()) {
@@ -173,7 +182,7 @@ export const FlagCard: React.FC<FlagCardProps> = ({
                   <div key={candidate.staff_id} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                     <div className="flex items-center gap-2.5">
                       <span className={`w-5 h-5 rounded-full text-xs flex items-center justify-center font-bold text-white ${
-                        idx === 0 ? 'bg-green-500' : idx === 1 ? 'bg-blue-500' : 'bg-gray-400'
+                        idx === 0 ? 'bg-green-500' : idx === 1 ? 'bg-sky-500' : 'bg-gray-400'
                       }`}>
                         {idx + 1}
                       </span>
@@ -194,7 +203,15 @@ export const FlagCard: React.FC<FlagCardProps> = ({
 
           {/* Action buttons */}
           {isActive && !action && (
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
+              {canFindReplacement && (
+                <button
+                  onClick={() => navigate(`/last-minute?date=${flag.affected_date}`)}
+                  className="btn-primary btn-sm text-xs"
+                >
+                  🚑 Find Replacement
+                </button>
+              )}
               <button
                 onClick={() => setAction('resolve')}
                 className="btn-success btn-sm text-xs"

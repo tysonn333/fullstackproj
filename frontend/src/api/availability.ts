@@ -93,8 +93,8 @@ export const availabilityApi = {
     work_date: string;
     is_available: boolean;
     half_day?: 'am' | 'pm' | null;
-  }): Promise<Availability> => {
-    const { data } = await apiClient.post<{ data: AvailabilityRow }>(
+  }): Promise<{ availability: Availability; flagsRaised: number }> => {
+    const { data } = await apiClient.post<{ data: AvailabilityRow; flags_raised?: number }>(
       `/api/v1/staff/${payload.staff_id}/availability`,
       {
         work_date: payload.work_date,
@@ -102,7 +102,9 @@ export const availabilityApi = {
         half_day: payload.half_day ?? null,
       }
     );
-    return mapAvailability(data.data);
+    // The backend raises coverage_gap / half_day_gap flags when a reduced
+    // availability strands existing assignments (UC-003) — surface the count.
+    return { availability: mapAvailability(data.data), flagsRaised: data.flags_raised ?? 0 };
   },
 
   // Leave Requests
@@ -138,11 +140,22 @@ export const availabilityApi = {
     return mapLeave(data.data);
   },
 
-  approveLeaveRequest: async (id: string, notes?: string): Promise<LeaveRequest> => {
-    const { data } = await apiClient.put<{ data: LeaveRow }>(`/api/v1/leave/${id}/approve`, {
-      notes,
-    });
-    return mapLeave(data.data);
+  approveLeaveRequest: async (
+    id: string,
+    notes?: string
+  ): Promise<{ request: LeaveRequest; conflictsCount: number; flagsRaised: number }> => {
+    const { data } = await apiClient.put<{
+      data: LeaveRow;
+      conflicts_count?: number;
+      flags_raised?: number;
+    }>(`/api/v1/leave/${id}/approve`, { notes });
+    // Approving leave can conflict with already-scheduled assignments; the
+    // backend reports how many and how many flags it raised for the panel.
+    return {
+      request: mapLeave(data.data),
+      conflictsCount: data.conflicts_count ?? 0,
+      flagsRaised: data.flags_raised ?? 0,
+    };
   },
 
   rejectLeaveRequest: async (id: string, notes?: string): Promise<LeaveRequest> => {
