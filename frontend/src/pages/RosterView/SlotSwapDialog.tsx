@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { rosterApi, type SlotCandidate } from '../../api/roster';
 import { SCORE_WEIGHTS } from '../../api/engine';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
+import { useAuth } from '../../hooks/useAuth';
 import type { ShiftSlot } from '../../types';
 
 interface SlotSwapDialogProps {
@@ -21,6 +22,7 @@ export const SlotSwapDialog: React.FC<SlotSwapDialogProps> = ({
   const [loading, setLoading] = useState(true);
   const [assigning, setAssigning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { isAdmin } = useAuth();
 
   // Each slot holds a single occupant — that's the one being swapped out.
   const currentAssignment = (slot.assignments ?? [])[0];
@@ -194,17 +196,17 @@ export const SlotSwapDialog: React.FC<SlotSwapDialogProps> = ({
                       <span>{c.late_shift_count} late shift(s) this month</span>
                     </div>
 
-                    {/* Action button */}
+                    {/* Action button (assigning is admin-only; everyone can view) */}
                     <div className="px-3 pb-3">
                       <button
                         onClick={() => handleAssign(c.staff.id)}
-                        disabled={isAssigning || isCurrent}
+                        disabled={isAssigning || isCurrent || !isAdmin}
                         className={`w-full btn-sm text-xs font-semibold ${
-                          isCurrent
+                          isCurrent || !isAdmin
                             ? 'btn-secondary opacity-50 cursor-not-allowed'
                             : 'text-white'
                         }`}
-                        style={isCurrent ? {} : { backgroundColor: color, borderColor: color }}
+                        style={isCurrent || !isAdmin ? {} : { backgroundColor: color, borderColor: color }}
                       >
                         {isAssigning ? (
                           <span className="flex items-center justify-center gap-1.5">
@@ -213,6 +215,8 @@ export const SlotSwapDialog: React.FC<SlotSwapDialogProps> = ({
                           </span>
                         ) : isCurrent ? (
                           'Currently Assigned'
+                        ) : !isAdmin ? (
+                          'Assign (admin only)'
                         ) : (
                           'Assign to Slot'
                         )}

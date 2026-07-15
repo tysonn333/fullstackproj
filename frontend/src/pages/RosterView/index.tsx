@@ -463,7 +463,7 @@ export const RosterView: React.FC = () => {
               isReadOnly={isReadOnly}
               isWeekendOrHoliday={isWeekendOrHoliday}
               onStaffClick={setSelectedStaff}
-              onSlotSwap={isAdmin && !isReadOnly ? handleSlotSwap : undefined}
+              onSlotSwap={!isReadOnly ? handleSlotSwap : undefined}
               exceptionsPanel={exceptionsPanel}
             />
           )}

@@ -258,6 +258,13 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
           </div>
         )}
 
+        {onSlotSwap && !isReadOnly && displaySlots.length > 0 && (
+          <div className="mb-3 px-4 py-2 bg-sky-50 border border-sky-200 rounded-lg flex items-center gap-2 text-sm text-sky-700">
+            <span>⚡</span>
+            Click any driver or attendant slot to open the UC-005 candidate ranking — and assign or swap crew.
+          </div>
+        )}
+
         {displaySlots.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
             <svg className="w-12 h-12 mx-auto mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -384,7 +391,7 @@ export const CrewGrid: React.FC<CrewGridProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                         d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                     </svg>
-                    {hasAssignment ? 'Swap Staff' : 'Assign Staff'}
+                    {hasAssignment ? 'View ranking & swap' : 'View ranking & assign'}
                   </button>
                 )}
               </div>

@@ -33,37 +33,71 @@ export async function authenticate(
       return;
     }
 
-    // Fetch profile to get role + linked staff record.
-    // Default to the least-privileged role ('employee') when no profile row
-    // exists, so a missing/misconfigured profile can never grant admin rights.
-    let { data: profile } = await supabaseAdmin
+    // Fetch the profile to get role + linked staff record.
+    //
+    // This must work across schema variants without a migration having run:
+    // a database created from the older `admin`/`ops_director` schema has no
+    // `profiles.staff_id` column, and selecting it would error. So we select
+    // `role, staff_id` first and, if that fails, fall back to `role` only and
+    // remember the column is absent. Crucially, we NEVER downgrade the role of
+    // an existing profile row — an earlier version clobbered admins to
+    // 'employee' when the staff_id select errored, which is exactly why
+    // admin@efar.sg showed up as an employee.
+    let profile: { role?: string | null; staff_id?: number | null } | null = null;
+    let hasStaffIdColumn = true;
+
+    const primary = await supabaseAdmin
       .from('profiles')
       .select('role, staff_id')
       .eq('id', data.user.id)
       .maybeSingle();
 
-    // Self-heal a missing profile row. Previously the linking logic lived only
-    // in GET /auth/me, but its UPDATE hit ZERO rows when the profile row didn't
-    // exist at all — so the UI showed the staff member's name while every write
-    // still returned 403 from ensureSelfOrAdmin (req.user.staffId stayed null).
-    // Creating the row here, and doing the email→staff link in the middleware,
-    // makes the link authoritative for every request.
-    if (!profile) {
-      const emailPrefix = data.user.email ? data.user.email.split('@')[0] : 'user';
-      const { data: created } = await supabaseAdmin
+    if (primary.error) {
+      hasStaffIdColumn = false;
+      const roleOnly = await supabaseAdmin
         .from('profiles')
-        .insert({ id: data.user.id, name: emailPrefix, role: 'employee' })
-        .select('role, staff_id')
-        .single();
-      profile = created ?? { role: 'employee', staff_id: null };
+        .select('role')
+        .eq('id', data.user.id)
+        .maybeSingle();
+      profile = roleOnly.data ?? null;
+    } else {
+      profile = primary.data;
     }
 
-    const role = profile?.role ?? 'employee';
+    // Self-heal only a GENUINELY missing profile row (a brand-new login). If the
+    // insert fails (row already exists, or an older role CHECK rejects
+    // 'employee'), re-read the stored role rather than assuming 'employee'.
+    if (!profile) {
+      const emailPrefix = data.user.email ? data.user.email.split('@')[0] : 'user';
+      const inserted = await supabaseAdmin
+        .from('profiles')
+        .insert({ id: data.user.id, name: emailPrefix, role: 'employee' })
+        .select('role')
+        .maybeSingle();
+      if (inserted.data) {
+        profile = inserted.data;
+      } else {
+        const reread = await supabaseAdmin
+          .from('profiles')
+          .select('role')
+          .eq('id', data.user.id)
+          .maybeSingle();
+        profile = reread.data ?? { role: 'employee' };
+      }
+    }
+
+    // Normalise the role: the legacy full-access role 'ops_director' maps to
+    // 'admin'; only 'admin'/'ops_director' grant admin, everything else is an
+    // employee. This keeps least-privilege while honouring an existing admin.
+    const rawRole = profile?.role ?? 'employee';
+    const role = rawRole === 'admin' || rawRole === 'ops_director' ? 'admin' : 'employee';
+
     let staffId: number | null = profile?.staff_id ?? null;
 
     // Link the login to a staff record by matching email, and PERSIST it so
     // ensureSelfOrAdmin (and subsequent requests) recognise the ownership.
-    if (staffId == null && data.user.email) {
+    // Skip entirely when the staff_id column doesn't exist yet.
+    if (hasStaffIdColumn && staffId == null && data.user.email) {
       const { data: matchingStaff } = await supabaseAdmin
         .from('staff')
         .select('staff_id')
