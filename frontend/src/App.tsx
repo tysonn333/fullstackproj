@@ -8,6 +8,7 @@ import { Login } from './pages/Login';
 import { RosterView } from './pages/RosterView';
 import { StaffManagement } from './pages/StaffManagement';
 import { AvailabilityLeave } from './pages/AvailabilityLeave';
+import { WeeklyAvailability } from './pages/WeeklyAvailability';
 import { ExceptionsPanel } from './pages/ExceptionsPanel';
 import { LastMinuteChange } from './pages/LastMinuteChange';
 
@@ -118,6 +119,16 @@ const App: React.FC = () => {
                   <ProtectedRoute>
                     <AppLayout>
                       <AvailabilityLeave />
+                    </AppLayout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/availability/weekly"
+                element={
+                  <ProtectedRoute>
+                    <AppLayout>
+                      <WeeklyAvailability />
                     </AppLayout>
                   </ProtectedRoute>
                 }

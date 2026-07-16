@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
   startOfWeek, endOfWeek, isSameMonth, isToday, parseISO
@@ -39,6 +40,7 @@ export const AvailabilityLeave: React.FC = () => {
 
   const { error: toastError } = useToast();
   const { isAdmin, staffId: myStaffId } = useAuth();
+  const navigate = useNavigate();
 
   // Load staff. Employees can only act on their own record, so lock the
   // selection to themselves; admins get the full list and pick anyone.
@@ -158,21 +160,33 @@ export const AvailabilityLeave: React.FC = () => {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-5 w-fit">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              tab === t.id
-                ? 'bg-white text-blue-700 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* Tabs + weekly availability action (same level) */}
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                tab === t.id
+                  ? 'bg-white text-blue-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate('/availability/weekly')}
+          className="btn-primary btn-sm"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Submit Weekly Availability
+        </button>
       </div>
 
       {/* Calendar Tab */}
