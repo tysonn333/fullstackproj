@@ -80,7 +80,7 @@ interface RankedRow {
   score_breakdown: ScoreBreakdown;
   rest_hours: number;
   late_shift_count: number;
-  proximity_km: number;
+  proximity_km: number | null;
   consecutive_days_flag: boolean;
   consecutive_days_count: number;
 }
@@ -91,7 +91,8 @@ export interface SlotCandidate {
   score_breakdown: ScoreBreakdown;
   rest_hours: number;
   late_shift_count: number;
-  proximity_km: number;
+  /** null when the staff member's postal code is missing/unmappable. */
+  proximity_km: number | null;
   reason: string;
 }
 
@@ -240,7 +241,9 @@ function mapSlotCandidate(c: RankedRow): SlotCandidate {
     late_shift_count: c.late_shift_count,
     proximity_km: c.proximity_km,
     reason:
-      `${c.rest_hours}h rest · ${c.proximity_km}km from base · ${c.late_shift_count} late shift(s)` +
+      `${c.rest_hours}h rest` +
+      (c.proximity_km != null ? ` · ${c.proximity_km}km from base` : '') +
+      ` · ${c.late_shift_count} late shift(s)` +
       (c.consecutive_days_flag ? ` · ${c.consecutive_days_count} consecutive days` : ''),
   };
 }

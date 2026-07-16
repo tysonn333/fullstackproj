@@ -379,9 +379,13 @@ export async function filterCandidates(
 
   const certsByStaff = await fetchCertifications(candidates.map((c) => c.staff_id));
 
-  const results: FilterResult[] = [];
-
-  for (const candidate of candidates) {
+  // Evaluate one candidate through the ordered pipeline. Steps within a
+  // candidate stay sequential (later filters only run if earlier ones pass),
+  // but candidates are independent of each other, so the caller runs them
+  // concurrently — this turned a ~(N candidates × 4 queries) serial chain into
+  // roughly the latency of a single candidate, which is what makes the
+  // ranking modal load fast.
+  async function evaluateCandidate(candidate: StaffCandidate): Promise<FilterResult> {
     const trace: FilterStep[] = [];
     const base = {
       staff_id: candidate.staff_id,
@@ -393,7 +397,7 @@ export async function filterCandidates(
 
     // Skip inactive staff immediately
     if (candidate.status !== 'active') {
-      results.push({
+      return {
         ...base,
         eligible: false,
         hard_blocked: true,
@@ -401,8 +405,7 @@ export async function filterCandidates(
         consecutive_days_flag: false,
         consecutive_days_count: 0,
         filter_trace: [{ filter: 'availability', passed: false, detail: 'Staff member is inactive' }],
-      });
-      continue;
+      };
     }
 
     // --- Step 1: Availability / Leave check ---
@@ -414,7 +417,7 @@ export async function filterCandidates(
     );
     if (blockedByLeave) {
       trace.push({ filter: 'availability', passed: false, detail: 'On approved leave or marked unavailable' });
-      results.push({
+      return {
         ...base,
         eligible: false,
         hard_blocked: true,
@@ -422,8 +425,7 @@ export async function filterCandidates(
         consecutive_days_flag: false,
         consecutive_days_count: 0,
         filter_trace: trace,
-      });
-      continue;
+      };
     }
     trace.push({ filter: 'availability', passed: true, detail: 'Available on this date' });
 
@@ -438,7 +440,7 @@ export async function filterCandidates(
           passed: false,
           detail: `Insufficient rest (${restHours.toFixed(1)}h < 12h required)`,
         });
-        results.push({
+        return {
           ...base,
           eligible: false,
           hard_blocked: true,
@@ -446,8 +448,7 @@ export async function filterCandidates(
           consecutive_days_flag: false,
           consecutive_days_count: 0,
           filter_trace: trace,
-        });
-        continue;
+        };
       }
     }
     trace.push({ filter: 'rest_hours', passed: true, detail: 'At least 12h rest since last shift' });
@@ -466,7 +467,7 @@ export async function filterCandidates(
         passed: false,
         detail: `Would exceed 12h daily limit (${totalHours}h)`,
       });
-      results.push({
+      return {
         ...base,
         eligible: false,
         hard_blocked: true,
@@ -474,8 +475,7 @@ export async function filterCandidates(
         consecutive_days_flag: false,
         consecutive_days_count: 0,
         filter_trace: trace,
-      });
-      continue;
+      };
     }
     trace.push({ filter: 'daily_hours', passed: true, detail: 'Within 12h daily limit' });
 
@@ -496,7 +496,7 @@ export async function filterCandidates(
     if (!isCertEligible(candidate.role, slot.service_type)) {
       const reason = `Role '${candidate.role}' not eligible for service type '${slot.service_type}'`;
       trace.push({ filter: 'certification', passed: false, detail: reason });
-      results.push({
+      return {
         ...base,
         eligible: false,
         hard_blocked: true,
@@ -504,13 +504,12 @@ export async function filterCandidates(
         consecutive_days_flag: consecutiveFlag,
         consecutive_days_count: consecutiveDays,
         filter_trace: trace,
-      });
-      continue;
+      };
     }
     if (!hasValidCertification(certsByStaff.get(candidate.staff_id), slot.service_type, rosterDate)) {
       const reason = `Missing or expired ${slot.service_type} certification`;
       trace.push({ filter: 'certification', passed: false, detail: reason });
-      results.push({
+      return {
         ...base,
         eligible: false,
         hard_blocked: true,
@@ -518,8 +517,7 @@ export async function filterCandidates(
         consecutive_days_flag: consecutiveFlag,
         consecutive_days_count: consecutiveDays,
         filter_trace: trace,
-      });
-      continue;
+      };
     }
     trace.push({
       filter: 'certification',
@@ -528,17 +526,19 @@ export async function filterCandidates(
     });
 
     // Passed all filters
-    results.push({
+    return {
       ...base,
       eligible: true,
       hard_blocked: false,
       consecutive_days_flag: consecutiveFlag,
       consecutive_days_count: consecutiveDays,
       filter_trace: trace,
-    });
+    };
   }
 
-  return results;
+  // Candidates are independent — evaluate them all concurrently.
+  // Promise.all preserves input order, so results stay aligned with the pool.
+  return Promise.all(candidates.map(evaluateCandidate));
 }
 
 /**

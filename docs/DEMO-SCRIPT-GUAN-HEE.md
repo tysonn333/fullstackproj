@@ -130,6 +130,7 @@ Draw on the whiteboard: **20 staff → [5 filters] → 8 eligible → [6-factor 
 
 ## Pre-demo checklist
 
+- [ ] Run `docs/migrations/2026-07-16-backfill-home-postals.sql` in the Supabase SQL Editor so staff distances actually VARY (otherwise every candidate shows the same/unknown distance and the proximity bars look flat)
 - [ ] Backend + frontend running, logged in as **admin@efar.sg** (badge must say **Admin**)
 - [ ] A roster generated for **today** (do it before class — don't gamble on live Wi-Fi)
 - [ ] One staff member you can safely mark Unavailable (know their name in advance)

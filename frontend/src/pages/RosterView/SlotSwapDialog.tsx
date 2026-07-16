@@ -192,7 +192,10 @@ export const SlotSwapDialog: React.FC<SlotSwapDialogProps> = ({
 
                     {/* Stats footer */}
                     <div className="px-3 pb-3 pt-1.5 flex items-center justify-between text-[10px] text-gray-500">
-                      <span>{c.rest_hours.toFixed(1)}h rest · {c.proximity_km}km from base</span>
+                      <span>
+                        {c.rest_hours.toFixed(1)}h rest
+                        {c.proximity_km != null ? ` · ${c.proximity_km}km from base` : ' · distance unknown (no postal code)'}
+                      </span>
                       <span>{c.late_shift_count} late shift(s) this month</span>
                     </div>
 

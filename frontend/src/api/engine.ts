@@ -48,7 +48,8 @@ export interface RankedEngineCandidate extends EngineCandidate {
   score_breakdown: ScoreBreakdown;
   late_shift_count: number;
   rest_hours: number;
-  proximity_km: number;
+  /** null when the staff member's postal code is missing/unmappable. */
+  proximity_km: number | null;
 }
 
 export interface EngineDecision {

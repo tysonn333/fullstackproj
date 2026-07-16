@@ -175,6 +175,12 @@ This creates all tables, constraints, and indexes.
 > or missing — UC-004 Filter 5 requires a real, unexpired cert. Run
 > `docs/migrations/2026-07-14-renew-certifications.sql`. (Staff created through
 > the UI now get role-implied certifications automatically.)
+>
+> **Everyone shows the same distance from base (or "distance unknown")?** Your
+> staff rows are missing valid Singapore postal codes, so UC-005 proximity can't
+> differentiate them. Run `docs/migrations/2026-07-16-backfill-home-postals.sql`
+> to assign realistic postals spread across the island (staff with a valid
+> postal are left untouched).
 
 ### 2. Seed initial data (optional)
 

@@ -31,7 +31,7 @@ import {
   shiftDurationMinutes,
   shiftEndDateTime,
 } from './filter';
-import { proximityScore, isProximityCompatible, distanceKm, STATION_POSTAL } from './proximity';
+import { proximityScore, isProximityCompatible, distanceKm, postalDistrict, STATION_POSTAL } from './proximity';
 
 export interface RankedCandidate extends FilterResult {
   score: number;
@@ -45,7 +45,9 @@ export interface RankedCandidate extends FilterResult {
   };
   late_shift_count: number;
   rest_hours: number;
-  proximity_km: number;
+  /** Distance from home to the station; null when the postal code is missing
+   *  or unmappable — a fake concrete number would mislead the UI. */
+  proximity_km: number | null;
 }
 
 export const WEIGHTS = {
@@ -231,10 +233,14 @@ export async function scoreCandidate(
 ): Promise<RankedCandidate> {
   const slotStart = timeToMinutes(slot.start_time);
 
-  const lateShiftCount = await getLateShiftCount(candidate.staff_id, month);
-  const restHours = await getRestHours(candidate.staff_id, rosterDate, slot.start_time);
-  const preferenceRaw = await getPreferenceScore(candidate.staff_id, slotStart);
-  const continuityRaw = await getContinuityScore(candidate.staff_id, rosterDate, slot);
+  // The four lookups hit independent data — run them concurrently rather than
+  // as a serial chain (4 round trips → 1 round-trip time per candidate).
+  const [lateShiftCount, restHours, preferenceRaw, continuityRaw] = await Promise.all([
+    getLateShiftCount(candidate.staff_id, month),
+    getRestHours(candidate.staff_id, rosterDate, slot.start_time),
+    getPreferenceScore(candidate.staff_id, slotStart),
+    getContinuityScore(candidate.staff_id, rosterDate, slot),
+  ]);
   const proximityRaw = proximityScore(candidate.home_postal);
   const certFitRaw = certFitScore(candidate.role, slot.service_type);
 
@@ -268,7 +274,12 @@ export async function scoreCandidate(
     },
     late_shift_count: lateShiftCount,
     rest_hours: round2(restHours),
-    proximity_km: round2(distanceKm(candidate.home_postal, STATION_POSTAL)),
+    // Only report a distance we can actually derive; an unmappable postal
+    // would otherwise produce the same fallback distance for everyone.
+    proximity_km:
+      postalDistrict(candidate.home_postal) == null
+        ? null
+        : round2(distanceKm(candidate.home_postal, STATION_POSTAL)),
   };
 }
 
@@ -297,8 +308,10 @@ export async function rankCandidates(
     if (a.late_shift_count !== b.late_shift_count) return a.late_shift_count - b.late_shift_count;
     // Tie-breaker 2: more rest hours
     if (b.rest_hours !== a.rest_hours) return b.rest_hours - a.rest_hours;
-    // Tie-breaker 3: closer to station
-    if (a.proximity_km !== b.proximity_km) return a.proximity_km - b.proximity_km;
+    // Tie-breaker 3: closer to station (unknown distance sorts as farthest)
+    const aKm = a.proximity_km ?? Number.POSITIVE_INFINITY;
+    const bKm = b.proximity_km ?? Number.POSITIVE_INFINITY;
+    if (aKm !== bKm) return aKm - bKm;
     // Tie-breaker 4: alphabetical by staff_id ascending
     return a.staff_id - b.staff_id;
   });
