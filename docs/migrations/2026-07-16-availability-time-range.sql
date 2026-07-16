@@ -22,6 +22,12 @@ ALTER TABLE availability
     ADD COLUMN IF NOT EXISTS start_time TIME DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS end_time   TIME DEFAULT NULL;
 
+-- Why the staff member is unavailable (the app makes this mandatory when
+-- is_available = FALSE; WhatsApp stores the raw message). Lets admins judge
+-- whether someone can still be called when slots go unfilled.
+ALTER TABLE availability
+    ADD COLUMN IF NOT EXISTS reason TEXT DEFAULT NULL;
+
 -- Both bounds or neither, and the window must run forwards.
 ALTER TABLE availability
     DROP CONSTRAINT IF EXISTS availability_time_window_chk;

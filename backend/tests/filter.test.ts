@@ -302,6 +302,17 @@ describe('filterCandidates() — Step 1: Availability / Leave', () => {
     expect(results[0].eligible).toBe(true);
   });
 
+  it("surfaces the staff member's unavailability reason in the block reason", async () => {
+    mockLeaveData = [];
+    mockAvailData = { is_available: false, half_day: null, reason: 'overseas for a wedding' };
+
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate()]);
+
+    expect(results[0].eligible).toBe(false);
+    expect(results[0].block_reason).toContain('overseas for a wedding');
+    expect(results[0].filter_trace[0].detail).toContain('overseas for a wedding');
+  });
+
   it('blocks a staff member whose availability window does not cover the slot', async () => {
     mockLeaveData = [];
     // Free 13:00–19:00 only ("oh I'm only free from 1pm–7pm")

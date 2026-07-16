@@ -134,14 +134,15 @@ export function availabilityEndMinutes(t: string): number {
 
 /**
  * Checks whether a staff member is blocked by leave / marked unavailable.
- * Returns true if blocked.
+ * Returns a human-readable block reason (shown to admins deciding who can
+ * still be called for unfilled slots), or null when not blocked.
  */
 async function isBlockedByLeaveOrAvailability(
   staffId: number,
   workDate: string,
   slotStart: number,
   slotEnd: number
-): Promise<boolean> {
+): Promise<string | null> {
   // Check approved leave that covers this date
   const { data: leaves } = await supabaseAdmin
     .from('leave_requests')
@@ -154,15 +155,15 @@ async function isBlockedByLeaveOrAvailability(
   if (leaves && leaves.length > 0) {
     for (const leave of leaves) {
       if (leave.leave_type === 'full_day') {
-        return true;
+        return 'On approved leave (full day)';
       }
       // half_am blocks 00:00–12:00 (0–720 min)
       if (leave.leave_type === 'half_am') {
-        if (overlapMinutes(slotStart, slotEnd, 0, 720) > 0) return true;
+        if (overlapMinutes(slotStart, slotEnd, 0, 720) > 0) return 'On approved leave (AM half)';
       }
       // half_pm blocks 12:00–24:00 (720–1440 min)
       if (leave.leave_type === 'half_pm') {
-        if (overlapMinutes(slotStart, slotEnd, 720, 1440) > 0) return true;
+        if (overlapMinutes(slotStart, slotEnd, 720, 1440) > 0) return 'On approved leave (PM half)';
       }
     }
   }
@@ -170,14 +171,18 @@ async function isBlockedByLeaveOrAvailability(
   // Check availability table — only respect explicit "not available" entries
   const { data: avail } = await supabaseAdmin
     .from('availability')
-    .select('is_available, half_day, start_time, end_time')
+    .select('is_available, half_day, start_time, end_time, reason')
     .eq('staff_id', staffId)
     .eq('work_date', workDate)
     .single();
 
   if (avail) {
     if (!avail.is_available) {
-      return true;
+      // Surface the staff member's stated reason so an admin can judge
+      // whether they're still worth calling for an unfilled slot.
+      return avail.reason
+        ? `Marked unavailable — "${avail.reason}"`
+        : 'Marked unavailable';
     }
     if (avail.start_time && avail.end_time) {
       // Time-window availability: block if any part of the slot's same-day
@@ -187,18 +192,23 @@ async function isBlockedByLeaveOrAvailability(
       const availStart = timeToMinutes(avail.start_time);
       const availEnd = availabilityEndMinutes(avail.end_time);
       const sameDayEnd = Math.min(slotEnd, 1440);
-      if (overlapMinutes(slotStart, sameDayEnd, 0, availStart) > 0) return true;
-      if (overlapMinutes(slotStart, sameDayEnd, availEnd, 1440) > 0) return true;
+      const window = `${avail.start_time.slice(0, 5)}–${avail.end_time.slice(0, 5)}`;
+      if (
+        overlapMinutes(slotStart, sameDayEnd, 0, availStart) > 0 ||
+        overlapMinutes(slotStart, sameDayEnd, availEnd, 1440) > 0
+      ) {
+        return `Only available ${window} — slot falls outside those hours`;
+      }
     } else if (avail.half_day === 'am') {
       // Legacy rows (e.g. WhatsApp): only AM is available; if slot is in PM, block
-      if (overlapMinutes(slotStart, slotEnd, 720, 1440) > 0) return true;
+      if (overlapMinutes(slotStart, slotEnd, 720, 1440) > 0) return 'Only available for the AM half';
     } else if (avail.half_day === 'pm') {
       // Only PM is available; if slot is in AM, block
-      if (overlapMinutes(slotStart, slotEnd, 0, 720) > 0) return true;
+      if (overlapMinutes(slotStart, slotEnd, 0, 720) > 0) return 'Only available for the PM half';
     }
   }
 
-  return false;
+  return null;
 }
 
 /**
@@ -427,19 +437,19 @@ export async function filterCandidates(
     }
 
     // --- Step 1: Availability / Leave check ---
-    const blockedByLeave = await isBlockedByLeaveOrAvailability(
+    const availabilityBlock = await isBlockedByLeaveOrAvailability(
       candidate.staff_id,
       rosterDate,
       slotStart,
       slotEnd
     );
-    if (blockedByLeave) {
-      trace.push({ filter: 'availability', passed: false, detail: 'On approved leave or marked unavailable' });
+    if (availabilityBlock) {
+      trace.push({ filter: 'availability', passed: false, detail: availabilityBlock });
       return {
         ...base,
         eligible: false,
         hard_blocked: true,
-        block_reason: 'On approved leave or marked unavailable',
+        block_reason: availabilityBlock,
         consecutive_days_flag: false,
         consecutive_days_count: 0,
         filter_trace: trace,

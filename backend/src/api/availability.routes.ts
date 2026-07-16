@@ -28,10 +28,14 @@ async function detectCoverageGaps(
   halfDay: 'am' | 'pm' | null,
   startTime: string | null,
   endTime: string | null,
+  reason: string | null,
   source: string
 ): Promise<number> {
   if (!isAvailable) {
-    return raiseFullDayConflictFlags(staffId, staffName, [workDate], `unavailability (${source})`);
+    // Quote the staff member's own reason in the flag so the admin can judge
+    // whether they can still be called back for the stranded slot.
+    const cause = reason ? `unavailability ("${reason}")` : `unavailability (${source})`;
+    return raiseFullDayConflictFlags(staffId, staffName, [workDate], cause);
   }
   if (startTime && endTime) {
     return raiseAvailabilityWindowGapFlags(staffId, staffName, workDate, startTime, endTime, source);
@@ -74,10 +78,12 @@ router.get(
 
 /**
  * POST /api/v1/staff/:id/availability
- * Body: { work_date, is_available, start_time?, end_time?, half_day? }
+ * Body: { work_date, is_available, start_time?, end_time?, reason?, half_day? }
  * start_time/end_time ("HH:MM") mark the window the staff member IS available
- * for (e.g. 13:00–19:00); omit both for a full-day answer. half_day is the
- * legacy AM/PM shorthand still used by the WhatsApp path.
+ * for (e.g. 13:00–19:00); omit both for a full-day answer. reason is mandatory
+ * when is_available=false — admins use it to decide whether the person can
+ * still be called for unfilled slots. half_day is the legacy AM/PM shorthand
+ * still used by the WhatsApp path.
  */
 router.post(
   '/staff/:id/availability',
@@ -90,6 +96,16 @@ router.post(
 
       if (!work_date || is_available === undefined) {
         res.status(400).json({ error: 'work_date and is_available are required' });
+        return;
+      }
+
+      // Unavailability must carry a reason (mandatory in the form too).
+      const reason: string | null =
+        typeof req.body.reason === 'string' && req.body.reason.trim()
+          ? req.body.reason.trim().slice(0, 500)
+          : null;
+      if (!is_available && !reason) {
+        res.status(400).json({ error: 'reason is required when marking unavailable' });
         return;
       }
 
@@ -130,6 +146,8 @@ router.post(
             half_day: start_time ? null : half_day ?? null,
             start_time,
             end_time,
+            // A reason only makes sense while unavailable — clear it otherwise.
+            reason: is_available ? null : reason,
             source: 'app',
             created_at: new Date().toISOString(),
           },
@@ -145,7 +163,7 @@ router.post(
         entity_id: data.availability_id,
         action: 'create',
         actor_id: req.user!.id,
-        details: { staff_id: staffId, work_date, is_available, half_day, start_time, end_time },
+        details: { staff_id: staffId, work_date, is_available, half_day, start_time, end_time, reason },
       });
 
       // Chad (UC-003): a reduced availability may strand existing assignments —
@@ -163,6 +181,7 @@ router.post(
         start_time ? null : half_day ?? null,
         start_time,
         end_time,
+        is_available ? null : reason,
         'availability update'
       );
 
@@ -224,9 +243,11 @@ router.post('/integrations/whatsapp/webhook', async (req: AuthenticatedRequest, 
           is_available: parsed.is_available,
           half_day: parsed.half_day ?? null,
           // WhatsApp only carries AM/PM granularity — clear any stale window
-          // a previous app submission left on this day.
+          // a previous app submission left on this day. The raw text doubles
+          // as the unavailability reason for admins.
           start_time: null,
           end_time: null,
+          reason: parsed.is_available ? null : String(message).slice(0, 500),
           source: 'whatsapp',
           created_at: new Date().toISOString(),
         },
@@ -247,6 +268,7 @@ router.post('/integrations/whatsapp/webhook', async (req: AuthenticatedRequest, 
       parsed.half_day ?? null,
       null,
       null,
+      parsed.is_available ? null : String(message).slice(0, 500),
       'WhatsApp availability'
     );
 

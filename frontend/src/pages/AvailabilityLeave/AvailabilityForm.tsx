@@ -41,6 +41,7 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
   const [choice, setChoice] = useState<AvailChoice>('available');
   const [windowStart, setWindowStart] = useState(DAY_START_MIN);
   const [windowEnd, setWindowEnd] = useState(DAY_END_MIN);
+  const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
   const { success, warning, error: toastError } = useToast();
 
@@ -74,6 +75,10 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
       toastError('End date must be on or after start date');
       return;
     }
+    if (choice === 'unavailable' && !reason.trim()) {
+      toastError('Reason required', 'Tell the admins why you are unavailable.');
+      return;
+    }
 
     setSaving(true);
     const is_available = choice === 'available';
@@ -90,6 +95,7 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
             is_available,
             start_time: sendWindow ? minutesToHHMM(windowStart) : null,
             end_time: sendWindow ? minutesToHHMM(windowEnd) : null,
+            reason: is_available ? null : reason.trim(),
           })
         )
       );
@@ -187,6 +193,26 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Unavailability reason — mandatory so admins can judge whether the
+          person can still be called when slots go unfilled */}
+      {choice === 'unavailable' && (
+        <div className="form-group">
+          <label className="label">Reason *</label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            required
+            rows={2}
+            maxLength={500}
+            placeholder="e.g. overseas, medical appointment, family commitment…"
+            className="input resize-none"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Visible to admins — it helps them decide who can still be called if a slot is unfilled.
+          </p>
+        </div>
+      )}
 
       {/* Time window — drag the two dots to the hours you can work */}
       {choice === 'available' && (

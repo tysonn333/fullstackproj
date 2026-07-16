@@ -11,6 +11,7 @@ interface AvailabilityRow {
   half_day: 'am' | 'pm' | null;
   start_time: string | null;
   end_time: string | null;
+  reason: string | null;
   source: string;
   created_at: string;
 }
@@ -49,6 +50,7 @@ function mapAvailability(row: AvailabilityRow): Availability {
     status,
     start_time: partialWindow ? start : row.half_day === 'am' ? '00:00' : row.half_day === 'pm' ? '12:00' : undefined,
     end_time: partialWindow ? end : row.half_day === 'am' ? '12:00' : row.half_day === 'pm' ? '23:59' : undefined,
+    notes: row.reason ?? undefined,
     created_at: row.created_at,
     updated_at: row.created_at,
   };
@@ -105,6 +107,8 @@ export const availabilityApi = {
     /** Available window "HH:MM" (e.g. 13:00–19:00); both null = whole day. */
     start_time?: string | null;
     end_time?: string | null;
+    /** Why unavailable — required when is_available is false. */
+    reason?: string | null;
   }): Promise<{ availability: Availability; flagsRaised: number }> => {
     const { data } = await apiClient.post<{ data: AvailabilityRow; flags_raised?: number }>(
       `/api/v1/staff/${payload.staff_id}/availability`,
@@ -113,6 +117,7 @@ export const availabilityApi = {
         is_available: payload.is_available,
         start_time: payload.start_time ?? null,
         end_time: payload.end_time ?? null,
+        reason: payload.reason ?? null,
       }
     );
     // The backend raises coverage_gap / half_day_gap flags when a reduced
