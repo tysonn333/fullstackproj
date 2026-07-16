@@ -8,6 +8,7 @@ import type { StaffRole } from '../types';
 export type FilterName =
   | 'availability'
   | 'rest_hours'
+  | 'late_shift_rest'
   | 'daily_hours'
   | 'consecutive_days'
   | 'certification';
@@ -31,6 +32,8 @@ export interface EngineCandidate {
   block_reason?: string;
   consecutive_days_flag: boolean;
   consecutive_days_count: number;
+  /** Soft flag: pre-noon start straight after a late shift (soft rest rule). */
+  late_shift_rest_flag?: boolean;
   filter_trace: FilterStep[];
 }
 
@@ -74,6 +77,7 @@ export const SCORE_WEIGHTS: { key: keyof ScoreBreakdown; label: string; weight: 
 export const FILTER_LABELS: Record<FilterName, string> = {
   availability: 'Availability',
   rest_hours: '12h Rest',
+  late_shift_rest: 'Post-Late-Shift Rest',
   daily_hours: '12h Daily Cap',
   consecutive_days: 'Consecutive Days',
   certification: 'Certification',

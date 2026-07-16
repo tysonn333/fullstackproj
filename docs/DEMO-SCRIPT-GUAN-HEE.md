@@ -71,7 +71,7 @@ Say:
 > "Ranking only sees people who survived UC-004 — a five-stage filter that runs **in strict order**, and every candidate carries a `filter_trace` recording the outcome of each stage:"
 
 1. **Availability / Leave** — approved leave (full or half-day) or a self-reported unavailable day = hard block.
-2. **Rest hours** — less than **12 hours** since their last shift ended = hard block (handles overnight shifts correctly).
+2. **Rest hours** — less than **12 hours** since their last shift ended = hard block (handles overnight shifts correctly). Plus a **post-late-shift soft rule**: a shift starting before 12:00 straight after a late shift (start ≥ 18:00) is flagged as a `rest_violation` warning — visible in the Exceptions panel — but never blocked.
 3. **Daily cap** — would exceed **12 working hours** in the day = hard block.
 4. **Consecutive days** — 7+ consecutive working days is a **soft flag**, not a block: the system warns the admin but lets a human decide (staffing reality beats rigidity).
 5. **Certification** — two checks: the **role hierarchy** (medics/EMTs are MTS-only; drivers/paramedics can do EAS) *and* a **real, unexpired certification row** for that service type. An expired cert = hard block.
@@ -98,7 +98,7 @@ Say (pairing — no UI needed, describe it):
 
 ## 6. Close (20 seconds)
 
-> "Everything I showed is covered by **129 automated backend tests** — every filter stage, the scoring math, the tie-breakers, and the pairing algorithm — so the engine's behaviour is verified, not just demonstrated. The design principle throughout: **never a black box** — every decision shows its working."
+> "Everything I showed is covered by **143 automated backend tests** — every filter stage, the scoring math, the tie-breakers, and the pairing algorithm — so the engine's behaviour is verified, not just demonstrated. The design principle throughout: **never a black box** — every decision shows its working."
 
 ---
 
@@ -108,7 +108,10 @@ Say (pairing — no UI needed, describe it):
 A: Rest under 12h is a safety violation — non-negotiable. A 7th consecutive day is a fatigue *risk* that a supervisor may accept during a staffing crunch, so the system flags it and lets a human decide. Hard rules for safety, soft rules for judgement.
 
 **Q: How did you choose the weights (25/20/20/15/10/10)?**
-A: From the requirements' priority order: fairness was the #1 stakeholder complaint (late-shift dumping), so it's heaviest; rest and proximity tie into safety and response time; preference and continuity are nice-to-haves. The weights are one constant (`WEIGHTS` in ranking.ts) — trivially tunable, and the UI reads the same source so the bars never lie.
+A: From the requirements' priority order: fairness was the #1 stakeholder complaint (late-shift dumping), so it's heaviest; rest and proximity tie into safety and response time; preference and continuity are nice-to-haves. And they're **configurable without touching code**: each weight can be overridden with a `RANK_WEIGHT_*` env var and the set is auto-normalised to sum to 1 (invalid values fall back to the defaults) — that satisfies the UC-005 precondition that "ranking weights are configured", with tests covering the normalisation.
+
+**Q: The rules reference says "after a late shift, the next shift shouldn't start before 12:00" — where is that?**
+A: Implemented as a **soft rule** in the filter pipeline (step 2b): if a candidate's previous shift was a late shift (start ≥ 18:00) and the new slot starts before noon, they stay eligible but carry a `late_shift_rest` soft flag — same philosophy as consecutive days: hard rules for safety, soft rules for judgement. If the engine (or an admin override) assigns them anyway, a `rest_violation` warning lands in the Exceptions panel.
 
 **Q: What happens when NOBODY passes the filters?**
 A: The slot stays unfilled, and the generator raises a **critical coverage-gap flag** in the Exceptions panel instead of silently assigning someone unsafe. The admin resolves it via Find Replacement or by importing more staff. (Common real cause: expired certifications — Filter 5 is strict; there's a migration and auto-provisioning that fixes it.)
@@ -135,4 +138,4 @@ Draw on the whiteboard: **20 staff → [5 filters] → 8 eligible → [6-factor 
 - [ ] A roster generated for **today** (do it before class — don't gamble on live Wi-Fi)
 - [ ] One staff member you can safely mark Unavailable (know their name in advance)
 - [ ] Employee login ready in an incognito window
-- [ ] `npm test` run that morning — say "129 passing" with confidence
+- [ ] `npm test` run that morning — say "143 passing" with confidence

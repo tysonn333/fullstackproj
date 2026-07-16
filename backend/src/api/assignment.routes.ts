@@ -208,8 +208,8 @@ router.post('/slots/:id/assign', requireAdmin, async (req: AuthenticatedRequest,
     // Filling the slot auto-resolves its open staffing-gap flags (UC-008 A3).
     await autoResolveSlotFlags(slotId);
 
-    // Raise consecutive days flag if applicable
-    if (candidate.consecutive_days_flag) {
+    // Raise soft-rule flags if applicable (advisory only — never blocking)
+    if (candidate.consecutive_days_flag || candidate.late_shift_rest_flag) {
       const { data: rosterRow } = await supabaseAdmin
         .from('shift_slots')
         .select('roster_id')
@@ -217,16 +217,30 @@ router.post('/slots/:id/assign', requireAdmin, async (req: AuthenticatedRequest,
         .single();
 
       if (rosterRow) {
-        await supabaseAdmin.from('flags').insert({
-          roster_id: rosterRow.roster_id,
-          slot_id: slotId,
-          staff_id,
-          flag_type: 'consecutive_days',
-          severity: 'warning',
-          message: `Staff ${candidate.full_name} has ${candidate.consecutive_days_count} consecutive working days prior to this shift`,
-          status: 'active',
-          created_at: new Date().toISOString(),
-        });
+        const softFlag = (flag_type: string, message: string) =>
+          supabaseAdmin.from('flags').insert({
+            roster_id: rosterRow.roster_id,
+            slot_id: slotId,
+            staff_id,
+            flag_type,
+            severity: 'warning',
+            message,
+            status: 'active',
+            created_at: new Date().toISOString(),
+          });
+
+        if (candidate.consecutive_days_flag) {
+          await softFlag(
+            'consecutive_days',
+            `Staff ${candidate.full_name} has ${candidate.consecutive_days_count} consecutive working days prior to this shift`
+          );
+        }
+        if (candidate.late_shift_rest_flag) {
+          await softFlag(
+            'rest_violation',
+            `Staff ${candidate.full_name} starts before 12:00 right after a late shift — recommend a later start (soft rule)`
+          );
+        }
       }
     }
 

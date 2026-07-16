@@ -17,7 +17,8 @@
  *   5. Where a pool is empty, leave that slot unassigned and raise a
  *      coverage_gap flag; where no proximity-compatible pair exists, assign the
  *      best pair and raise a proximity flag.
- *   6. Raise consecutive_days flags for any assigned staff reaching >= 7 days.
+ *   6. Raise soft-rule flags for any assigned staff: consecutive_days at
+ *      >= 7 days, and rest_violation for a pre-noon start after a late shift.
  *
  * Constrained (EAS) ambulances are crewed first so scarce driver/paramedic
  * staff are not spent on MTS work that any role could cover.
@@ -421,6 +422,37 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
 
       const pair = pairCrew(rankedDrivers, rankedAttendants, buddyMap);
 
+      // Soft flags an assigned crew member carries out of the UC-004 pipeline:
+      // 7+ consecutive days, and a pre-noon start straight after a late shift.
+      const raiseSoftFlags = async (
+        slotId: number,
+        member: RankedCandidate,
+        positionLabel: string
+      ): Promise<void> => {
+        if (member.consecutive_days_flag) {
+          await raiseFlag(
+            rosterId,
+            slotId,
+            member.staff_id,
+            'consecutive_days',
+            'warning',
+            `${positionLabel} ${member.full_name} has worked ${member.consecutive_days_count} consecutive days prior to ${rosterDate}`
+          );
+          flagsRaised++;
+        }
+        if (member.late_shift_rest_flag) {
+          await raiseFlag(
+            rosterId,
+            slotId,
+            member.staff_id,
+            'rest_violation',
+            'warning',
+            `${positionLabel} ${member.full_name} starts before 12:00 on ${rosterDate} right after a late shift — recommend a later start (soft rule)`
+          );
+          flagsRaised++;
+        }
+      };
+
       // Assign the driver side
       if (group.driverSlot) {
         if (pair.driver) {
@@ -429,17 +461,7 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
             errors.push(`Slot ${group.driverSlot.slot_id} (driver): ${err}`);
           } else {
             assignmentsMade++;
-            if (pair.driver.consecutive_days_flag) {
-              await raiseFlag(
-                rosterId,
-                group.driverSlot.slot_id,
-                pair.driver.staff_id,
-                'consecutive_days',
-                'warning',
-                `Driver ${pair.driver.full_name} has worked ${pair.driver.consecutive_days_count} consecutive days prior to ${rosterDate}`
-              );
-              flagsRaised++;
-            }
+            await raiseSoftFlags(group.driverSlot.slot_id, pair.driver, 'Driver');
           }
         } else {
           await raiseFlag(
@@ -462,17 +484,7 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
             errors.push(`Slot ${group.attendantSlot.slot_id} (attendant): ${err}`);
           } else {
             assignmentsMade++;
-            if (pair.attendant.consecutive_days_flag) {
-              await raiseFlag(
-                rosterId,
-                group.attendantSlot.slot_id,
-                pair.attendant.staff_id,
-                'consecutive_days',
-                'warning',
-                `Attendant ${pair.attendant.full_name} has worked ${pair.attendant.consecutive_days_count} consecutive days prior to ${rosterDate}`
-              );
-              flagsRaised++;
-            }
+            await raiseSoftFlags(group.attendantSlot.slot_id, pair.attendant, 'Attendant');
           }
         } else {
           await raiseFlag(

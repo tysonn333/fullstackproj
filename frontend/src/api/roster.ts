@@ -52,6 +52,7 @@ interface RankedCandidateRow {
   block_reason?: string;
   consecutive_days_flag: boolean;
   consecutive_days_count: number;
+  late_shift_rest_flag?: boolean;
   score: number;
   rest_hours: number;
   late_shift_count: number;
@@ -83,6 +84,7 @@ interface RankedRow {
   proximity_km: number | null;
   consecutive_days_flag: boolean;
   consecutive_days_count: number;
+  late_shift_rest_flag?: boolean;
 }
 
 export interface SlotCandidate {
@@ -198,7 +200,8 @@ function mapCandidate(c: RankedCandidateRow): ReplacementCandidate {
   const reason = c.block_reason
     ? c.block_reason
     : `${c.rest_hours}h rest · ${c.late_shift_count} late shift(s)` +
-      (c.consecutive_days_flag ? ` · ${c.consecutive_days_count} consecutive days` : '');
+      (c.consecutive_days_flag ? ` · ${c.consecutive_days_count} consecutive days` : '') +
+      (c.late_shift_rest_flag ? ' · early start after late shift' : '');
   return {
     staff: {
       id: String(c.staff_id),
@@ -244,7 +247,8 @@ function mapSlotCandidate(c: RankedRow): SlotCandidate {
       `${c.rest_hours}h rest` +
       (c.proximity_km != null ? ` · ${c.proximity_km}km from base` : '') +
       ` · ${c.late_shift_count} late shift(s)` +
-      (c.consecutive_days_flag ? ` · ${c.consecutive_days_count} consecutive days` : ''),
+      (c.consecutive_days_flag ? ` · ${c.consecutive_days_count} consecutive days` : '') +
+      (c.late_shift_rest_flag ? ' · early start after late shift' : ''),
   };
 }
 

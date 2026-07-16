@@ -12,6 +12,10 @@
  *   5. Preference    — early/late shift preference match          (weight 0.10)
  *   6. Continuity    — no overlapping same-day assignment         (weight 0.10)
  *
+ * The weights above are the defaults; each can be overridden with a
+ * RANK_WEIGHT_* env var (see resolveWeights) and the set is normalised to
+ * sum to 1, satisfying the UC-005 precondition that weights are configurable.
+ *
  * Tie-breaker: fewer late shifts → more rest hours → closer to station →
  * alphabetical by staff_id.
  *
@@ -30,6 +34,7 @@ import {
   timeToMinutes,
   shiftDurationMinutes,
   shiftEndDateTime,
+  LATE_SHIFT_START_MINUTES,
 } from './filter';
 import { proximityScore, isProximityCompatible, distanceKm, postalDistrict, STATION_POSTAL } from './proximity';
 
@@ -50,7 +55,7 @@ export interface RankedCandidate extends FilterResult {
   proximity_km: number | null;
 }
 
-export const WEIGHTS = {
+const DEFAULT_WEIGHTS = {
   fairness: 0.25,
   rest: 0.2,
   proximity: 0.2,
@@ -59,13 +64,74 @@ export const WEIGHTS = {
   continuity: 0.1,
 };
 
-// Late shifts: start_time >= 18:00 (1080 minutes)
-const LATE_SHIFT_THRESHOLD = 18 * 60;
+export type Weights = typeof DEFAULT_WEIGHTS;
 
 /**
- * Returns the number of late shifts (start >= 18:00) the staff member has this calendar month.
+ * Resolves the ranking weights (UC-005 precondition: "ranking weights are
+ * configured"). Each component can be overridden via a RANK_WEIGHT_* env var
+ * (e.g. RANK_WEIGHT_FAIRNESS=0.4). Invalid or non-positive values fall back to
+ * the default for that component, and the final set is normalised to sum to 1
+ * so the composite score always stays on the 0–100 scale.
  */
-async function getLateShiftCount(staffId: number, month: string): Promise<number> {
+export function resolveWeights(env: Record<string, string | undefined> = process.env): Weights {
+  const read = (key: string, fallback: number): number => {
+    const raw = env[`RANK_WEIGHT_${key}`];
+    if (raw == null || raw === '') return fallback;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+
+  const w = {
+    fairness: read('FAIRNESS', DEFAULT_WEIGHTS.fairness),
+    rest: read('REST', DEFAULT_WEIGHTS.rest),
+    proximity: read('PROXIMITY', DEFAULT_WEIGHTS.proximity),
+    cert_fit: read('CERT_FIT', DEFAULT_WEIGHTS.cert_fit),
+    preference: read('PREFERENCE', DEFAULT_WEIGHTS.preference),
+    continuity: read('CONTINUITY', DEFAULT_WEIGHTS.continuity),
+  };
+
+  const total = w.fairness + w.rest + w.proximity + w.cert_fit + w.preference + w.continuity;
+  return {
+    fairness: w.fairness / total,
+    rest: w.rest / total,
+    proximity: w.proximity / total,
+    cert_fit: w.cert_fit / total,
+    preference: w.preference / total,
+    continuity: w.continuity / total,
+  };
+}
+
+export const WEIGHTS = resolveWeights();
+
+// ── Per-candidate assignment history (fetched ONCE per candidate) ─────────────
+
+interface HistoryRow {
+  shift_slots: {
+    slot_id?: number;
+    start_time: string;
+    end_time: string;
+    rosters: { roster_date: string };
+  };
+}
+
+/**
+ * The fairness, rest and continuity components all read the same assignment
+ * history — fetch it in one query per candidate (previously three).
+ */
+async function fetchScoringHistory(staffId: number): Promise<HistoryRow[]> {
+  const { data } = await supabaseAdmin
+    .from('assignments')
+    .select('shift_slots!inner(slot_id, start_time, end_time, rosters!inner(roster_date))')
+    .eq('staff_id', staffId)
+    .neq('status', 'cancelled');
+
+  return (data ?? []) as unknown as HistoryRow[];
+}
+
+/**
+ * Number of late shifts (start >= 18:00) the staff member has in the calendar month.
+ */
+function lateShiftCountFor(rows: HistoryRow[], month: string): number {
   // month = "YYYY-MM" — compute the boundary with string math so the result
   // is timezone-independent (Date/setMonth mixes UTC parsing with local-time
   // arithmetic and can land in the wrong month on negative-offset servers).
@@ -76,22 +142,12 @@ async function getLateShiftCount(staffId: number, month: string): Promise<number
       ? `${year + 1}-01-01`
       : `${year}-${String(mon + 1).padStart(2, '0')}-01`;
 
-  const { data } = await supabaseAdmin
-    .from('assignments')
-    .select('shift_slots!inner(start_time, rosters!inner(roster_date))')
-    .eq('staff_id', staffId)
-    .neq('status', 'cancelled');
-
-  if (!data) return 0;
-
-  type Row = { shift_slots: { start_time: string; rosters: { roster_date: string } } };
   let count = 0;
-
-  for (const row of data as unknown as Row[]) {
+  for (const row of rows) {
     const rosterDate = row.shift_slots.rosters?.roster_date;
     if (!rosterDate) continue;
     if (rosterDate < startOfMonth || rosterDate >= endOfMonth) continue;
-    if (timeToMinutes(row.shift_slots.start_time) >= LATE_SHIFT_THRESHOLD) {
+    if (timeToMinutes(row.shift_slots.start_time) >= LATE_SHIFT_START_MINUTES) {
       count++;
     }
   }
@@ -100,24 +156,14 @@ async function getLateShiftCount(staffId: number, month: string): Promise<number
 }
 
 /**
- * Returns hours since the staff member's last shift end, up to a maximum of 24.
+ * Hours since the staff member's last shift end, up to a maximum of 24.
  * Returns 24 if no prior shifts (maximally rested).
  */
-async function getRestHours(staffId: number, rosterDate: string, slotStartTime: string): Promise<number> {
-  const { data } = await supabaseAdmin
-    .from('assignments')
-    .select('shift_slots!inner(start_time, end_time, rosters!inner(roster_date))')
-    .eq('staff_id', staffId)
-    .neq('status', 'cancelled');
-
-  if (!data || data.length === 0) return 24;
-
-  type Row = { shift_slots: { start_time: string; end_time: string; rosters: { roster_date: string } } };
-
+function restHoursFor(rows: HistoryRow[], rosterDate: string, slotStartTime: string): number {
   const slotStartDt = new Date(`${rosterDate}T${slotStartTime}`);
   let lastEnd: Date | null = null;
 
-  for (const row of data as unknown as Row[]) {
+  for (const row of rows) {
     const d = row.shift_slots.rosters?.roster_date;
     if (!d) continue;
     if (d >= rosterDate) continue;
@@ -164,34 +210,13 @@ async function getPreferenceScore(
 /**
  * Returns 1 if no same-day slot overlap, 0 if overlap exists.
  */
-async function getContinuityScore(
-  staffId: number,
-  rosterDate: string,
-  slot: ShiftSlot
-): Promise<number> {
-  const { data } = await supabaseAdmin
-    .from('assignments')
-    .select('shift_slots!inner(slot_id, start_time, end_time, rosters!inner(roster_date))')
-    .eq('staff_id', staffId)
-    .neq('status', 'cancelled');
-
-  if (!data) return 1.0;
-
-  type Row = {
-    shift_slots: {
-      slot_id: number;
-      start_time: string;
-      end_time: string;
-      rosters: { roster_date: string };
-    };
-  };
-
+function continuityScoreFor(rows: HistoryRow[], rosterDate: string, slot: ShiftSlot): number {
   // End times extend past 1440 for overnight shifts so same-day overlap
   // comparisons stay on one linear axis.
   const newStart = timeToMinutes(slot.start_time);
   const newEnd = newStart + shiftDurationMinutes(slot.start_time, slot.end_time);
 
-  for (const row of data as unknown as Row[]) {
+  for (const row of rows) {
     const d = row.shift_slots.rosters?.roster_date;
     if (d !== rosterDate) continue;
     if (row.shift_slots.slot_id === slot.slot_id) continue;
@@ -233,14 +258,16 @@ export async function scoreCandidate(
 ): Promise<RankedCandidate> {
   const slotStart = timeToMinutes(slot.start_time);
 
-  // The four lookups hit independent data — run them concurrently rather than
-  // as a serial chain (4 round trips → 1 round-trip time per candidate).
-  const [lateShiftCount, restHours, preferenceRaw, continuityRaw] = await Promise.all([
-    getLateShiftCount(candidate.staff_id, month),
-    getRestHours(candidate.staff_id, rosterDate, slot.start_time),
+  // Two round trips per candidate, run concurrently: one assignment-history
+  // fetch feeding fairness + rest + continuity (previously three separate
+  // queries), and the preferences lookup.
+  const [history, preferenceRaw] = await Promise.all([
+    fetchScoringHistory(candidate.staff_id),
     getPreferenceScore(candidate.staff_id, slotStart),
-    getContinuityScore(candidate.staff_id, rosterDate, slot),
   ]);
+  const lateShiftCount = lateShiftCountFor(history, month);
+  const restHours = restHoursFor(history, rosterDate, slot.start_time);
+  const continuityRaw = continuityScoreFor(history, rosterDate, slot);
   const proximityRaw = proximityScore(candidate.home_postal);
   const certFitRaw = certFitScore(candidate.role, slot.service_type);
 

@@ -37,8 +37,8 @@ The EFAR Ambulance Scheduling System replaces a manual, spreadsheet-based roster
 | **UC-001** Roster view | Crew grid + timeline views, date navigation, weekend/PH banner, historical read-only mode, staff weekly-schedule drill-down, exceptions sidebar, and **A4 filters** (service type / role) that grey out non-matching rows |
 | **UC-002** Auto-generate | **Job-feed-driven generation**: call-centre CSV import (`POST /jobs/import` + Import Jobs UI), peak-concurrency demand → fleet size, **defer when no job list** (`NO_JOB_LIST` + skeleton fallback), **weekend/PH 2-ambulance baseline**, publish & lock |
 | **UC-003** Availability & leave | Leave request/approve/reject with duplicate-overlap blocking; availability form (full/half-day, date range); **approving half-day leave raises `half_day_gap` flags**; leave conflicting with a published roster raises **critical `coverage_gap` flags**; part-timer **WhatsApp webhook** with half-day gap detection (Chad) |
-| **UC-004** Filter (Guan Hee) | Five ordered filters with hard/soft semantics, real cert-expiry validation, per-candidate `filter_trace` |
-| **UC-005** Rank & assign (Guan Hee) | 6-component composite score (fairness/rest/proximity/cert-fit/preference/continuity), SG postal-district proximity, driver+attendant pairing with proximity walk-down, **buddy preference honoured within top-3** |
+| **UC-004** Filter (Guan Hee) | Five ordered filters with hard/soft semantics, real cert-expiry validation, per-candidate `filter_trace`, **post-late-shift rest soft rule** (pre-noon start after a late shift → `rest_violation` warning flag) |
+| **UC-005** Rank & assign (Guan Hee) | 6-component composite score (fairness/rest/proximity/cert-fit/preference/continuity), **env-configurable weights** (`RANK_WEIGHT_*`, auto-normalised), SG postal-district proximity, driver+attendant pairing with proximity walk-down, **buddy preference honoured within top-3** |
 | **UC-006** Last-minute change | Drop → ranked replacements → confirm swap; **absent-all-day batch drop** (every shift cancelled + flagged); filling a slot **auto-resolves** its gap flags |
 | **UC-007** Staff profiles | CRUD + certifications; **shift-time & buddy preferences UI**; **expiring-certs alert banner** (30-day window; expired certs are already excluded by UC-004 Filter 5) |
 | **UC-008** Exceptions | Severity-sorted panel, resolve/dismiss with audit trail, **bulk-action mode**, **CSV export**, `auto_resolved` status surfaced, **browser push-notification fallback** for new critical flags (Chad) |
@@ -49,10 +49,20 @@ The EFAR Ambulance Scheduling System replaces a manual, spreadsheet-based roster
   → daily hours → consecutive days (soft flag) → certification — and now
   validates a **real, unexpired certification** for the slot's service type.
   Every candidate carries a `filter_trace` showing exactly which checks passed
-  or failed.
+  or failed. A **post-late-shift rest soft rule** (scheduling rules ref:
+  "next shift start no earlier than 12:00 after a late shift") flags — but never
+  blocks — a pre-noon start straight after a late shift; the generator and the
+  manual-assign endpoint surface it as a `rest_violation` warning flag.
 - **UC-005 ranking** scores each candidate on a weighted composite of *fairness,
   rest, proximity, certification fit, preference,* and *continuity*. Proximity is
   derived from Singapore postal districts (`services/scheduling/proximity.ts`).
+  The weights default to 25/20/20/15/10/10 and are **configurable via
+  `RANK_WEIGHT_FAIRNESS`, `RANK_WEIGHT_REST`, `RANK_WEIGHT_PROXIMITY`,
+  `RANK_WEIGHT_CERT_FIT`, `RANK_WEIGHT_PREFERENCE`, `RANK_WEIGHT_CONTINUITY`**
+  env vars — the set is auto-normalised to sum to 1 so scores stay on the 0–100
+  scale. Each candidate's eligibility checks and score components are computed
+  from a **single assignment-history query** (previously three per candidate),
+  keeping generation and the ranking modal fast as the roster grows.
 - **UC-005 crew pairing** (`pairCrew`) pairs the best driver with the best
   attendant, walking the ranked pools for a **proximity-compatible** pair and
   raising a proximity flag only when no compatible pair exists.

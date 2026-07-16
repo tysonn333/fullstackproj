@@ -4,6 +4,8 @@
  * Filters staff eligibility for a given shift slot in strict order:
  *   1. Availability check      — hard block (leave / MC / unavailable)
  *   2. Rest hours check        — hard block (< 12 h since last shift end)
+ *      └ post-late-shift rest  — SOFT FLAG: after a late shift (start ≥ 18:00)
+ *        the next shift should not start before 12:00 (scheduling rules ref)
  *   3. Daily hours check       — hard block (> 12 h already scheduled that day)
  *   4. Consecutive days check  — SOFT FLAG only (>= 7 consecutive days)
  *   5. Certification match     — hard block: role hierarchy AND a valid,
@@ -23,6 +25,7 @@ export type CrewPosition = 'driver' | 'attendant';
 export type FilterName =
   | 'availability'
   | 'rest_hours'
+  | 'late_shift_rest'
   | 'daily_hours'
   | 'consecutive_days'
   | 'certification';
@@ -69,6 +72,9 @@ export interface FilterResult {
   block_reason?: string;
   consecutive_days_flag: boolean;
   consecutive_days_count: number;
+  /** Soft flag: shift starts before 12:00 on the day after a late shift
+   *  (scheduling rules ref: "minimum rest period after late shift"). */
+  late_shift_rest_flag?: boolean;
   filter_trace: FilterStep[];
 }
 
@@ -211,104 +217,86 @@ async function isBlockedByLeaveOrAvailability(
   return null;
 }
 
-/**
- * Returns the end time of the last completed/assigned shift before workDate for the staff.
- * Returns null if no prior shift exists.
- */
-async function getLastShiftEnd(
-  staffId: number,
-  workDate: string
-): Promise<Date | null> {
-  // Get all assignments for slots before or on the work date, ordered desc
-  const { data } = await supabaseAdmin
-    .from('assignments')
-    .select('shift_slots!inner(roster_id, start_time, end_time, rosters!inner(roster_date))')
-    .eq('staff_id', staffId)
-    .neq('status', 'cancelled')
-    .order('shift_slots(rosters(roster_date))', { ascending: false })
-    .limit(20);
+/** Shifts starting at or after 18:00 count as late shifts (shared with UC-005). */
+export const LATE_SHIFT_START_MINUTES = 18 * 60;
 
-  if (!data || data.length === 0) return null;
+/** After a late shift, the next shift should not start before 12:00 (soft rule). */
+export const POST_LATE_SHIFT_EARLIEST_START = 12 * 60;
 
-  // Find the most recent shift strictly before workDate
-  type AssignRow = {
-    shift_slots: {
-      roster_id: number;
-      start_time: string;
-      end_time: string;
-      rosters: { roster_date: string };
-    };
+/** One staff member's assignment history row, as fetched once per candidate. */
+export interface AssignmentHistoryRow {
+  slot_id?: number;
+  shift_slots: {
+    start_time: string;
+    end_time: string;
+    rosters: { roster_date: string };
   };
-
-  const rows = data as unknown as AssignRow[];
-  let lastEnd: Date | null = null;
-
-  for (const row of rows) {
-    const slotDate = row.shift_slots.rosters?.roster_date;
-    if (!slotDate) continue;
-    if (slotDate >= workDate) continue;
-
-    const endDt = shiftEndDateTime(slotDate, row.shift_slots.start_time, row.shift_slots.end_time);
-    if (!lastEnd || endDt > lastEnd) {
-      lastEnd = endDt;
-    }
-  }
-
-  return lastEnd;
 }
 
 /**
- * Returns total scheduled minutes for a staff member on a given date (excluding the target slot).
+ * Fetches a staff member's non-cancelled assignment history in ONE query.
+ * The rest-hours, daily-cap, consecutive-days and post-late-shift checks all
+ * derive from this same data, so fetching it once (instead of once per check)
+ * cuts the pipeline's DB round trips per candidate from 3 to 1.
  */
-async function getDailyScheduledMinutes(
-  staffId: number,
-  workDate: string,
-  excludeSlotId?: number
-): Promise<number> {
+async function fetchAssignmentHistory(staffId: number): Promise<AssignmentHistoryRow[]> {
   const { data } = await supabaseAdmin
     .from('assignments')
     .select('slot_id, shift_slots!inner(start_time, end_time, rosters!inner(roster_date))')
     .eq('staff_id', staffId)
     .neq('status', 'cancelled');
 
-  if (!data) return 0;
+  return (data ?? []) as unknown as AssignmentHistoryRow[];
+}
 
-  type AssignRow = {
-    slot_id: number;
-    shift_slots: {
-      start_time: string;
-      end_time: string;
-      rosters: { roster_date: string };
-    };
-  };
+/**
+ * Most recent shift strictly before workDate: its absolute end time and its
+ * start-of-day minutes (used by the post-late-shift soft rule).
+ * Returns null if no prior shift exists.
+ */
+export function lastShiftBefore(
+  rows: AssignmentHistoryRow[],
+  workDate: string
+): { end: Date; startMinutes: number } | null {
+  let last: { end: Date; startMinutes: number } | null = null;
 
+  for (const row of rows) {
+    const slotDate = row.shift_slots.rosters?.roster_date;
+    if (!slotDate || slotDate >= workDate) continue;
+
+    const endDt = shiftEndDateTime(slotDate, row.shift_slots.start_time, row.shift_slots.end_time);
+    if (!last || endDt > last.end) {
+      last = { end: endDt, startMinutes: timeToMinutes(row.shift_slots.start_time) };
+    }
+  }
+
+  return last;
+}
+
+/**
+ * Total scheduled minutes for a staff member on a given date (excluding the target slot).
+ */
+export function dailyScheduledMinutes(
+  rows: AssignmentHistoryRow[],
+  workDate: string,
+  excludeSlotId?: number
+): number {
   let total = 0;
-  for (const row of data as unknown as AssignRow[]) {
+  for (const row of rows) {
     if (row.slot_id === excludeSlotId) continue;
     const slotDate = row.shift_slots.rosters?.roster_date;
     if (slotDate !== workDate) continue;
     total += shiftDurationMinutes(row.shift_slots.start_time, row.shift_slots.end_time);
   }
-
   return total;
 }
 
 /**
- * Returns count of consecutive working days ending on (but not including) workDate.
+ * Count of consecutive working days ending on (but not including) workDate.
  */
-async function getConsecutiveDays(staffId: number, workDate: string): Promise<number> {
-  const { data } = await supabaseAdmin
-    .from('assignments')
-    .select('shift_slots!inner(rosters!inner(roster_date))')
-    .eq('staff_id', staffId)
-    .neq('status', 'cancelled');
-
-  if (!data) return 0;
-
-  type AssignRow = { shift_slots: { rosters: { roster_date: string } } };
-
+export function consecutivePriorDays(rows: AssignmentHistoryRow[], workDate: string): number {
   const workDates = new Set<string>();
-  for (const row of data as unknown as AssignRow[]) {
+  for (const row of rows) {
     const d = row.shift_slots.rosters?.roster_date;
     if (d && d < workDate) workDates.add(d);
   }
@@ -432,6 +420,7 @@ export async function filterCandidates(
         block_reason: 'Staff member is inactive',
         consecutive_days_flag: false,
         consecutive_days_count: 0,
+        late_shift_rest_flag: false,
         filter_trace: [{ filter: 'availability', passed: false, detail: 'Staff member is inactive' }],
       };
     }
@@ -452,16 +441,20 @@ export async function filterCandidates(
         block_reason: availabilityBlock,
         consecutive_days_flag: false,
         consecutive_days_count: 0,
+        late_shift_rest_flag: false,
         filter_trace: trace,
       };
     }
     trace.push({ filter: 'availability', passed: true, detail: 'Available on this date' });
 
+    // Steps 2–4 all derive from the same assignment history — fetched once.
+    const history = await fetchAssignmentHistory(candidate.staff_id);
+
     // --- Step 2: Rest hours check (min 12 h) ---
-    const lastEnd = await getLastShiftEnd(candidate.staff_id, rosterDate);
-    if (lastEnd) {
+    const lastShift = lastShiftBefore(history, rosterDate);
+    if (lastShift) {
       const shiftStartDt = new Date(`${rosterDate}T${slot.start_time}`);
-      const restHours = (shiftStartDt.getTime() - lastEnd.getTime()) / (1000 * 60 * 60);
+      const restHours = (shiftStartDt.getTime() - lastShift.end.getTime()) / (1000 * 60 * 60);
       if (restHours < 12) {
         trace.push({
           filter: 'rest_hours',
@@ -475,18 +468,32 @@ export async function filterCandidates(
           block_reason: `Insufficient rest (${restHours.toFixed(1)}h < 12h required)`,
           consecutive_days_flag: false,
           consecutive_days_count: 0,
+          late_shift_rest_flag: false,
           filter_trace: trace,
         };
       }
     }
     trace.push({ filter: 'rest_hours', passed: true, detail: 'At least 12h rest since last shift' });
 
+    // --- Step 2b: Post-late-shift rest (SOFT rule, scheduling rules ref) ---
+    // After a late shift (start >= 18:00) the next shift should not start
+    // before 12:00. Traced only when it actually fires so a clean candidate
+    // still shows the canonical five-stage pipeline.
+    const lateShiftRestFlag =
+      !!lastShift &&
+      lastShift.startMinutes >= LATE_SHIFT_START_MINUTES &&
+      slotStart < POST_LATE_SHIFT_EARLIEST_START;
+    if (lateShiftRestFlag) {
+      trace.push({
+        filter: 'late_shift_rest',
+        passed: true,
+        soft: true,
+        detail: `Soft flag: previous shift was a late shift — this shift starts before 12:00`,
+      });
+    }
+
     // --- Step 3: Daily hours check (max 12 h) ---
-    const dailyMinutes = await getDailyScheduledMinutes(
-      candidate.staff_id,
-      rosterDate,
-      slot.slot_id
-    );
+    const dailyMinutes = dailyScheduledMinutes(history, rosterDate, slot.slot_id);
     if (dailyMinutes + slotDuration > 720) {
       // 720 min = 12 h
       const totalHours = ((dailyMinutes + slotDuration) / 60).toFixed(1);
@@ -502,13 +509,14 @@ export async function filterCandidates(
         block_reason: `Would exceed 12h daily limit (${totalHours}h)`,
         consecutive_days_flag: false,
         consecutive_days_count: 0,
+        late_shift_rest_flag: lateShiftRestFlag,
         filter_trace: trace,
       };
     }
     trace.push({ filter: 'daily_hours', passed: true, detail: 'Within 12h daily limit' });
 
     // --- Step 4: Consecutive days (SOFT flag, NOT a hard block) ---
-    const consecutiveDays = await getConsecutiveDays(candidate.staff_id, rosterDate);
+    const consecutiveDays = consecutivePriorDays(history, rosterDate);
     const consecutiveFlag = consecutiveDays >= 6; // 6 prior + today = 7+ consecutive
     trace.push({
       filter: 'consecutive_days',
@@ -531,6 +539,7 @@ export async function filterCandidates(
         block_reason: reason,
         consecutive_days_flag: consecutiveFlag,
         consecutive_days_count: consecutiveDays,
+        late_shift_rest_flag: lateShiftRestFlag,
         filter_trace: trace,
       };
     }
@@ -544,6 +553,7 @@ export async function filterCandidates(
         block_reason: reason,
         consecutive_days_flag: consecutiveFlag,
         consecutive_days_count: consecutiveDays,
+        late_shift_rest_flag: lateShiftRestFlag,
         filter_trace: trace,
       };
     }
@@ -560,6 +570,7 @@ export async function filterCandidates(
       hard_blocked: false,
       consecutive_days_flag: consecutiveFlag,
       consecutive_days_count: consecutiveDays,
+      late_shift_rest_flag: lateShiftRestFlag,
       filter_trace: trace,
     };
   }

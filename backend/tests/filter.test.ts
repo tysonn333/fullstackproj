@@ -412,6 +412,84 @@ describe('filterCandidates() — Step 2: Rest Hours (< 12h hard block)', () => {
   });
 });
 
+describe('filterCandidates() — Step 2b: Post-late-shift rest (SOFT rule)', () => {
+  const rosterDate = '2025-06-15';
+
+  beforeEach(() => {
+    mockLeaveData = [];
+    mockAvailData = null;
+    mockAssignData = [];
+  });
+
+  it('soft-flags (but keeps eligible) a pre-noon shift straight after a late shift', async () => {
+    // Late shift 18:00–06:00 on 2025-06-13 ends 06:00 on 2025-06-14; the new
+    // 06:00 slot on 2025-06-15 gives a full 24h rest (passes the hard block)
+    // but starts before 12:00 → soft rule fires.
+    mockAssignData = [
+      {
+        shift_slots: {
+          start_time: '18:00:00',
+          end_time: '06:00:00',
+          rosters: { roster_date: '2025-06-13' },
+        },
+      },
+    ];
+
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate()]);
+
+    expect(results[0].eligible).toBe(true);
+    expect(results[0].hard_blocked).toBe(false);
+    expect(results[0].late_shift_rest_flag).toBe(true);
+
+    const step = results[0].filter_trace.find((s) => s.filter === 'late_shift_rest');
+    expect(step?.soft).toBe(true);
+    expect(step?.passed).toBe(true);
+  });
+
+  it('does NOT flag a shift starting at/after 12:00 following a late shift', async () => {
+    mockAssignData = [
+      {
+        shift_slots: {
+          start_time: '18:00:00',
+          end_time: '06:00:00',
+          rosters: { roster_date: '2025-06-13' },
+        },
+      },
+    ];
+
+    const noonSlot: ShiftSlot = { ...baseSlot, start_time: '12:00:00', end_time: '18:00:00' };
+    const results = await filterCandidates(noonSlot, rosterDate, [makeCandidate()]);
+
+    expect(results[0].eligible).toBe(true);
+    expect(results[0].late_shift_rest_flag).toBe(false);
+    expect(results[0].filter_trace.some((s) => s.filter === 'late_shift_rest')).toBe(false);
+  });
+
+  it('does NOT flag a pre-noon shift when the previous shift was not a late shift', async () => {
+    // Day shift 06:00–18:00 two days earlier — plenty of rest, not late.
+    mockAssignData = [
+      {
+        shift_slots: {
+          start_time: '06:00:00',
+          end_time: '18:00:00',
+          rosters: { roster_date: '2025-06-13' },
+        },
+      },
+    ];
+
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate()]);
+
+    expect(results[0].eligible).toBe(true);
+    expect(results[0].late_shift_rest_flag).toBe(false);
+  });
+
+  it('does NOT flag a candidate with no prior shifts', async () => {
+    mockAssignData = [];
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate()]);
+    expect(results[0].late_shift_rest_flag).toBe(false);
+  });
+});
+
 describe('filterCandidates() — Step 3: Daily Hours (> 12h hard block)', () => {
   const rosterDate = '2025-06-15';
 

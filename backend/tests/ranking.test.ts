@@ -7,6 +7,7 @@ import {
   scoreCandidate,
   pairCrew,
   certFitScore,
+  resolveWeights,
   WEIGHTS,
   RankedCandidate,
 } from '../src/services/scheduling/ranking';
@@ -255,6 +256,55 @@ describe('scoreCandidate()', () => {
   });
 });
 
+// ── resolveWeights() Tests ────────────────────────────────────────────────────
+
+describe('resolveWeights()', () => {
+  const sum = (w: ReturnType<typeof resolveWeights>) =>
+    w.fairness + w.rest + w.proximity + w.cert_fit + w.preference + w.continuity;
+
+  it('returns the documented defaults when no env overrides are set', () => {
+    const w = resolveWeights({});
+    expect(w).toEqual({
+      fairness: 0.25,
+      rest: 0.2,
+      proximity: 0.2,
+      cert_fit: 0.15,
+      preference: 0.1,
+      continuity: 0.1,
+    });
+  });
+
+  it('the active WEIGHTS always sum to 1 (keeps scores on the 0–100 scale)', () => {
+    expect(sum(WEIGHTS)).toBeCloseTo(1, 10);
+  });
+
+  it('normalises env overrides so the set still sums to 1', () => {
+    const w = resolveWeights({
+      RANK_WEIGHT_FAIRNESS: '1',
+      RANK_WEIGHT_REST: '1',
+      RANK_WEIGHT_PROXIMITY: '1',
+      RANK_WEIGHT_CERT_FIT: '1',
+      RANK_WEIGHT_PREFERENCE: '1',
+      RANK_WEIGHT_CONTINUITY: '1',
+    });
+    expect(sum(w)).toBeCloseTo(1, 10);
+    expect(w.fairness).toBeCloseTo(1 / 6, 10);
+  });
+
+  it('an override shifts relative importance while preserving the total', () => {
+    const w = resolveWeights({ RANK_WEIGHT_FAIRNESS: '0.5' });
+    expect(w.fairness).toBeGreaterThan(w.rest);
+    expect(w.fairness).toBeCloseTo(0.5 / 1.25, 10);
+    expect(sum(w)).toBeCloseTo(1, 10);
+  });
+
+  it('falls back to the default for invalid or non-positive values', () => {
+    expect(resolveWeights({ RANK_WEIGHT_REST: 'banana' })).toEqual(resolveWeights({}));
+    expect(resolveWeights({ RANK_WEIGHT_REST: '-2' })).toEqual(resolveWeights({}));
+    expect(resolveWeights({ RANK_WEIGHT_REST: '' })).toEqual(resolveWeights({}));
+  });
+});
+
 // ── certFitScore() Tests ──────────────────────────────────────────────────────
 
 describe('certFitScore()', () => {
@@ -357,6 +407,7 @@ describe('rankCandidates()', () => {
       role: 'paramedic',
       consecutive_days_flag: true,
       consecutive_days_count: 7,
+      late_shift_rest_flag: true,
     });
 
     const result = await rankCandidates([candidate], daySlot, rosterDate);
@@ -367,6 +418,7 @@ describe('rankCandidates()', () => {
     expect(ranked.role).toBe('paramedic');
     expect(ranked.consecutive_days_flag).toBe(true);
     expect(ranked.consecutive_days_count).toBe(7);
+    expect(ranked.late_shift_rest_flag).toBe(true);
   });
 
   it('night slot is handled without error', async () => {
