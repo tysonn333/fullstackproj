@@ -301,6 +301,52 @@ describe('filterCandidates() — Step 1: Availability / Leave', () => {
 
     expect(results[0].eligible).toBe(true);
   });
+
+  it('blocks a staff member whose availability window does not cover the slot', async () => {
+    mockLeaveData = [];
+    // Free 13:00–19:00 only ("oh I'm only free from 1pm–7pm")
+    mockAvailData = { is_available: true, half_day: null, start_time: '13:00:00', end_time: '19:00:00' };
+
+    // Slot 06:00–18:00 starts before the window opens
+    const results = await filterCandidates(baseSlot, rosterDate, [makeCandidate()]);
+
+    expect(results[0].eligible).toBe(false);
+    expect(results[0].hard_blocked).toBe(true);
+  });
+
+  it('does NOT block a staff member whose availability window covers the whole slot', async () => {
+    mockLeaveData = [];
+    mockAvailData = { is_available: true, half_day: null, start_time: '13:00:00', end_time: '19:00:00' };
+
+    // Slot 14:00–18:00 sits entirely inside 13:00–19:00
+    const slot: ShiftSlot = { ...baseSlot, start_time: '14:00:00', end_time: '18:00:00' };
+    const results = await filterCandidates(slot, rosterDate, [makeCandidate()]);
+
+    expect(results[0].eligible).toBe(true);
+  });
+
+  it('treats end_time 23:59 as end-of-day ("only free after 8pm" covers an evening slot)', async () => {
+    mockLeaveData = [];
+    mockAvailData = { is_available: true, half_day: null, start_time: '20:00:00', end_time: '23:59:00' };
+
+    // Overnight slot 20:00–06:00 — the same-day portion 20:00–24:00 is covered
+    const slot: ShiftSlot = { ...baseSlot, start_time: '20:00:00', end_time: '06:00:00' };
+    const results = await filterCandidates(slot, rosterDate, [makeCandidate()]);
+
+    expect(results[0].eligible).toBe(true);
+  });
+
+  it('window takes precedence: blocks a slot ending after the window closes', async () => {
+    mockLeaveData = [];
+    mockAvailData = { is_available: true, half_day: null, start_time: '08:00:00', end_time: '16:00:00' };
+
+    // Slot 14:00–18:00 runs two hours past the 16:00 close
+    const slot: ShiftSlot = { ...baseSlot, start_time: '14:00:00', end_time: '18:00:00' };
+    const results = await filterCandidates(slot, rosterDate, [makeCandidate()]);
+
+    expect(results[0].eligible).toBe(false);
+    expect(results[0].hard_blocked).toBe(true);
+  });
 });
 
 describe('filterCandidates() — Step 2: Rest Hours (< 12h hard block)', () => {

@@ -6,14 +6,19 @@ import { parseWhatsAppMessage } from '../integrations/whatsapp';
 import {
   raiseHalfDayGapFlags,
   raiseFullDayConflictFlags,
+  raiseAvailabilityWindowGapFlags,
 } from '../services/coverage.service';
+import { timeToMinutes, availabilityEndMinutes } from '../services/scheduling/filter';
 
 const router = Router();
 
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
 /**
  * Coverage-gap detection for a changed availability record (UC-003 / Chad).
- * half_day='am' means only the AM half is available → the PM half is blocked.
- * Returns the number of flags raised.
+ * A start/end window means only those hours are available; half_day='am'
+ * (legacy / WhatsApp) means only the AM half is available → the PM half is
+ * blocked. Returns the number of flags raised.
  */
 async function detectCoverageGaps(
   staffId: number,
@@ -21,10 +26,15 @@ async function detectCoverageGaps(
   workDate: string,
   isAvailable: boolean,
   halfDay: 'am' | 'pm' | null,
+  startTime: string | null,
+  endTime: string | null,
   source: string
 ): Promise<number> {
   if (!isAvailable) {
     return raiseFullDayConflictFlags(staffId, staffName, [workDate], `unavailability (${source})`);
+  }
+  if (startTime && endTime) {
+    return raiseAvailabilityWindowGapFlags(staffId, staffName, workDate, startTime, endTime, source);
   }
   if (halfDay) {
     const blockedHalf = halfDay === 'am' ? 'pm' : 'am';
@@ -64,7 +74,10 @@ router.get(
 
 /**
  * POST /api/v1/staff/:id/availability
- * Body: { work_date, is_available, half_day? }
+ * Body: { work_date, is_available, start_time?, end_time?, half_day? }
+ * start_time/end_time ("HH:MM") mark the window the staff member IS available
+ * for (e.g. 13:00–19:00); omit both for a full-day answer. half_day is the
+ * legacy AM/PM shorthand still used by the WhatsApp path.
  */
 router.post(
   '/staff/:id/availability',
@@ -73,16 +86,40 @@ router.post(
     try {
       const staffId = parseInt(req.params.id, 10);
       const { work_date, is_available, half_day } = req.body;
+      let { start_time, end_time } = req.body;
 
       if (!work_date || is_available === undefined) {
         res.status(400).json({ error: 'work_date and is_available are required' });
         return;
       }
 
+      // Time window: both bounds or neither, valid HH:MM, start before end.
+      start_time = start_time || null;
+      end_time = end_time || null;
+      if ((start_time === null) !== (end_time === null)) {
+        res.status(400).json({ error: 'start_time and end_time must be provided together' });
+        return;
+      }
+      if (start_time !== null) {
+        if (!TIME_RE.test(start_time) || !TIME_RE.test(end_time)) {
+          res.status(400).json({ error: 'start_time and end_time must be HH:MM (00:00–23:59)' });
+          return;
+        }
+        if (timeToMinutes(start_time) >= availabilityEndMinutes(end_time)) {
+          res.status(400).json({ error: 'start_time must be before end_time' });
+          return;
+        }
+        if (!is_available) {
+          res.status(400).json({ error: 'a time window only applies when is_available is true' });
+          return;
+        }
+      }
+
       // Employees may only set their own availability; admins may set anyone's.
       if (!ensureSelfOrAdmin(req, res, staffId)) return;
 
-      // Upsert — one availability record per staff per day
+      // Upsert — one availability record per staff per day. A time window
+      // supersedes the legacy AM/PM shorthand, so half_day is cleared with it.
       const { data, error } = await supabaseAdmin
         .from('availability')
         .upsert(
@@ -90,7 +127,9 @@ router.post(
             staff_id: staffId,
             work_date,
             is_available: Boolean(is_available),
-            half_day: half_day ?? null,
+            half_day: start_time ? null : half_day ?? null,
+            start_time,
+            end_time,
             source: 'app',
             created_at: new Date().toISOString(),
           },
@@ -106,7 +145,7 @@ router.post(
         entity_id: data.availability_id,
         action: 'create',
         actor_id: req.user!.id,
-        details: { staff_id: staffId, work_date, is_available, half_day },
+        details: { staff_id: staffId, work_date, is_available, half_day, start_time, end_time },
       });
 
       // Chad (UC-003): a reduced availability may strand existing assignments —
@@ -121,7 +160,9 @@ router.post(
         staffRow?.full_name ?? `Staff ${staffId}`,
         work_date,
         Boolean(is_available),
-        half_day ?? null,
+        start_time ? null : half_day ?? null,
+        start_time,
+        end_time,
         'availability update'
       );
 
@@ -182,6 +223,10 @@ router.post('/integrations/whatsapp/webhook', async (req: AuthenticatedRequest, 
           work_date: workDate,
           is_available: parsed.is_available,
           half_day: parsed.half_day ?? null,
+          // WhatsApp only carries AM/PM granularity — clear any stale window
+          // a previous app submission left on this day.
+          start_time: null,
+          end_time: null,
           source: 'whatsapp',
           created_at: new Date().toISOString(),
         },
@@ -200,6 +245,8 @@ router.post('/integrations/whatsapp/webhook', async (req: AuthenticatedRequest, 
       workDate,
       parsed.is_available,
       parsed.half_day ?? null,
+      null,
+      null,
       'WhatsApp availability'
     );
 

@@ -116,10 +116,20 @@ export function shiftEndDateTime(shiftDate: string, startTime: string, endTime: 
 /**
  * Computes overlap in minutes between two [start, end) ranges (all in minutes).
  */
-function overlapMinutes(s1: number, e1: number, s2: number, e2: number): number {
+export function overlapMinutes(s1: number, e1: number, s2: number, e2: number): number {
   const start = Math.max(s1, s2);
   const end = Math.min(e1, e2);
   return Math.max(0, end - start);
+}
+
+/**
+ * End of an availability window in minutes. The UI's scale tops out at 23:59,
+ * which staff use to mean "until the end of the day" — treat it as 24:00 so a
+ * shift ending exactly at midnight isn't blocked by the missing minute.
+ */
+export function availabilityEndMinutes(t: string): number {
+  const m = timeToMinutes(t);
+  return m >= 1439 ? 1440 : m;
 }
 
 /**
@@ -160,7 +170,7 @@ async function isBlockedByLeaveOrAvailability(
   // Check availability table — only respect explicit "not available" entries
   const { data: avail } = await supabaseAdmin
     .from('availability')
-    .select('is_available, half_day')
+    .select('is_available, half_day, start_time, end_time')
     .eq('staff_id', staffId)
     .eq('work_date', workDate)
     .single();
@@ -169,12 +179,20 @@ async function isBlockedByLeaveOrAvailability(
     if (!avail.is_available) {
       return true;
     }
-    // half_day availability restricts the other half
-    if (avail.half_day === 'am') {
-      // Only AM is available; if slot is in PM, block
+    if (avail.start_time && avail.end_time) {
+      // Time-window availability: block if any part of the slot's same-day
+      // hours falls outside [start_time, end_time). Overnight minutes past
+      // 24:00 belong to the next day and are not checked here — consistent
+      // with how half-day rules treat overnight shifts.
+      const availStart = timeToMinutes(avail.start_time);
+      const availEnd = availabilityEndMinutes(avail.end_time);
+      const sameDayEnd = Math.min(slotEnd, 1440);
+      if (overlapMinutes(slotStart, sameDayEnd, 0, availStart) > 0) return true;
+      if (overlapMinutes(slotStart, sameDayEnd, availEnd, 1440) > 0) return true;
+    } else if (avail.half_day === 'am') {
+      // Legacy rows (e.g. WhatsApp): only AM is available; if slot is in PM, block
       if (overlapMinutes(slotStart, slotEnd, 720, 1440) > 0) return true;
-    }
-    if (avail.half_day === 'pm') {
+    } else if (avail.half_day === 'pm') {
       // Only PM is available; if slot is in AM, block
       if (overlapMinutes(slotStart, slotEnd, 0, 720) > 0) return true;
     }
