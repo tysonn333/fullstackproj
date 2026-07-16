@@ -359,9 +359,20 @@ export const AvailabilityLeave: React.FC = () => {
                         {isHalfDay && (
                           <div className="absolute bottom-0 left-0 right-0 h-1 bg-orange-400/40 rounded-b-lg" title="Half-day gap" />
                         )}
+                        {avail?.status === 'unavailable' && !leave && avail.notes && (
+                          <div className="mt-0.5 w-full" title={`Unavailable: ${avail.notes}`}>
+                            <span className="text-[9px] text-red-700 font-medium leading-tight block text-center truncate">
+                              {avail.notes}
+                            </span>
+                          </div>
+                        )}
                         {avail?.status === 'partial' && !leave && (
-                          <div className="mt-0.5">
-                            <span className="text-[9px] text-amber-600">Partial</span>
+                          <div className="mt-0.5 w-full">
+                            <span className="text-[9px] text-amber-700 font-medium leading-tight block text-center truncate">
+                              {avail.start_time && avail.end_time
+                                ? `${avail.start_time}–${avail.end_time}`
+                                : 'Partial'}
+                            </span>
                           </div>
                         )}
                       </button>

@@ -196,3 +196,58 @@
 }
 .toast-enter { animation: slideIn 0.3s ease-out; }
 .toast-exit { animation: slideOut 0.3s ease-in; }
+
+/* Dual-handle time-range slider (TimeRangeSlider) — the two stacked range
+   inputs are invisible except for their thumbs, so only the dots catch the
+   pointer and the shared track underneath stays visible. */
+.time-range-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  pointer-events: none;
+  height: 100%;
+  margin: 0;
+  outline: none;
+}
+.time-range-thumb::-webkit-slider-runnable-track {
+  background: transparent;
+  border: none;
+  height: 100%;
+}
+.time-range-thumb::-moz-range-track {
+  background: transparent;
+  border: none;
+}
+.time-range-thumb::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 3px solid #16a34a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: grab;
+  margin-top: 3px;
+}
+.time-range-thumb::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  box-shadow: 0 0 0 5px rgba(22, 163, 74, 0.15);
+}
+.time-range-thumb::-moz-range-thumb {
+  pointer-events: auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 3px solid #16a34a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: grab;
+}
+.time-range-thumb:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.3);
+}
+.time-range-thumb:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.3);
+}

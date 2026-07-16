@@ -2,6 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { eachDayOfInterval, parseISO, format } from 'date-fns';
 import { availabilityApi } from '../../api/availability';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
+import {
+  TimeRangeSlider,
+  DAY_START_MIN,
+  DAY_END_MIN,
+  minutesToHHMM,
+  minutesToLabel,
+} from '../../components/TimeRangeSlider';
 import { useToast } from '../../components/Toast';
 import type { Availability, Staff } from '../../types';
 
@@ -14,28 +21,12 @@ interface AvailabilityFormProps {
   onSaved?: (records: Availability[]) => void;
 }
 
-type AvailChoice = 'available' | 'unavailable' | 'am_only' | 'pm_only';
+type AvailChoice = 'available' | 'unavailable';
 
 const CHOICES: { value: AvailChoice; label: string; desc: string; ring: string }[] = [
-  { value: 'available', label: 'Available', desc: 'Full day', ring: 'border-green-500 bg-green-50 text-green-700' },
+  { value: 'available', label: 'Available', desc: 'Set my hours below', ring: 'border-green-500 bg-green-50 text-green-700' },
   { value: 'unavailable', label: 'Unavailable', desc: 'Not working', ring: 'border-red-500 bg-red-50 text-red-700' },
-  { value: 'am_only', label: 'AM only', desc: 'Morning only', ring: 'border-amber-500 bg-amber-50 text-amber-700' },
-  { value: 'pm_only', label: 'PM only', desc: 'Afternoon only', ring: 'border-amber-500 bg-amber-50 text-amber-700' },
 ];
-
-/** Maps a UI choice to the availability table's is_available + half_day fields. */
-function choiceToPayload(choice: AvailChoice): { is_available: boolean; half_day: 'am' | 'pm' | null } {
-  switch (choice) {
-    case 'available':
-      return { is_available: true, half_day: null };
-    case 'unavailable':
-      return { is_available: false, half_day: null };
-    case 'am_only':
-      return { is_available: true, half_day: 'am' };
-    case 'pm_only':
-      return { is_available: true, half_day: 'pm' };
-  }
-}
 
 export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
   staffList,
@@ -48,6 +39,9 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
   const [startDate, setStartDate] = useState(initialDate ?? today);
   const [endDate, setEndDate] = useState(initialDate ?? today);
   const [choice, setChoice] = useState<AvailChoice>('available');
+  const [windowStart, setWindowStart] = useState(DAY_START_MIN);
+  const [windowEnd, setWindowEnd] = useState(DAY_END_MIN);
+  const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
   const { success, warning, error: toastError } = useToast();
 
@@ -69,6 +63,8 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
       ? [parseISO(startDate)]
       : [];
 
+  const isFullDay = windowStart === DAY_START_MIN && windowEnd === DAY_END_MIN;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!staffId) {
@@ -79,9 +75,16 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
       toastError('End date must be on or after start date');
       return;
     }
+    if (choice === 'unavailable' && !reason.trim()) {
+      toastError('Reason required', 'Tell the admins why you are unavailable.');
+      return;
+    }
 
     setSaving(true);
-    const { is_available, half_day } = choiceToPayload(choice);
+    const is_available = choice === 'available';
+    // A window narrower than the full 00:00–23:59 scale is stored as
+    // start/end times; the full scale means "the whole day" (no window).
+    const sendWindow = is_available && !isFullDay;
     try {
       // One upsert per day in the range (the API is a per-day upsert).
       const saved = await Promise.all(
@@ -90,7 +93,9 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
             staff_id: staffId,
             work_date: format(day, 'yyyy-MM-dd'),
             is_available,
-            half_day,
+            start_time: sendWindow ? minutesToHHMM(windowStart) : null,
+            end_time: sendWindow ? minutesToHHMM(windowEnd) : null,
+            reason: is_available ? null : reason.trim(),
           })
         )
       );
@@ -172,7 +177,7 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
       {/* Availability choice */}
       <div className="form-group">
         <label className="label">Availability *</label>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {CHOICES.map((c) => (
             <button
               type="button"
@@ -188,6 +193,63 @@ export const AvailabilityForm: React.FC<AvailabilityFormProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Unavailability reason — mandatory so admins can judge whether the
+          person can still be called when slots go unfilled */}
+      {choice === 'unavailable' && (
+        <div className="form-group">
+          <label className="label">Reason *</label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            required
+            rows={2}
+            maxLength={500}
+            placeholder="e.g. overseas, medical appointment, family commitment…"
+            className="input resize-none"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Visible to admins — it helps them decide who can still be called if a slot is unfilled.
+          </p>
+        </div>
+      )}
+
+      {/* Time window — drag the two dots to the hours you can work */}
+      {choice === 'available' && (
+        <div className="form-group p-4 rounded-xl border border-gray-200 bg-gray-50">
+          <div className="flex items-center justify-between mb-3">
+            <label className="label mb-0">My hours</label>
+            <span className="text-sm font-semibold text-green-700">
+              {isFullDay ? 'All day' : `${minutesToLabel(windowStart)} – ${minutesToLabel(windowEnd)}`}
+            </span>
+          </div>
+          <TimeRangeSlider
+            startMin={windowStart}
+            endMin={windowEnd}
+            onChange={(s, e) => {
+              setWindowStart(s);
+              setWindowEnd(e);
+            }}
+          />
+          <div className="flex items-center justify-between mt-2">
+            <p className="text-xs text-gray-500">
+              Drag the dots to set when you're free — e.g. 1:00 PM – 7:00 PM, or 8:00 PM onwards.
+            </p>
+            {!isFullDay && (
+              <button
+                type="button"
+                onClick={() => {
+                  setWindowStart(DAY_START_MIN);
+                  setWindowEnd(DAY_END_MIN);
+                }}
+                className="text-xs font-medium text-blue-600 hover:text-blue-700 flex-shrink-0 ml-3"
+              >
+                Reset to all day
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <button type="submit" disabled={saving || rangeDays.length === 0} className="btn-primary w-full">
         {saving ? (

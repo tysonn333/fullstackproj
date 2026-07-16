@@ -67,6 +67,12 @@ CREATE TABLE staff_preferences (
 );
 
 -- availability
+-- start_time/end_time: the window the staff member IS available for that day
+-- (e.g. 13:00–19:00; end_time 23:59 means "until end of day"). Both NULL =
+-- whole day. half_day is the legacy AM/PM shorthand still written by the
+-- WhatsApp path; the roster filter prefers the time window when present.
+-- reason: why the staff member is unavailable (mandatory in the app when
+-- is_available = FALSE) — helps admins decide who to call for unfilled slots.
 CREATE TABLE availability (
     availability_id SERIAL PRIMARY KEY,
     staff_id        INT NOT NULL REFERENCES staff(staff_id) ON DELETE CASCADE,
@@ -74,10 +80,17 @@ CREATE TABLE availability (
     is_available    BOOLEAN NOT NULL DEFAULT TRUE,
     half_day        VARCHAR(10) DEFAULT NULL
                     CHECK (half_day IN ('am', 'pm') OR half_day IS NULL),
+    start_time      TIME DEFAULT NULL,
+    end_time        TIME DEFAULT NULL,
+    reason          TEXT DEFAULT NULL,
     source          VARCHAR(20) NOT NULL DEFAULT 'app'
                     CHECK (source IN ('app', 'whatsapp')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (staff_id, work_date)
+    UNIQUE (staff_id, work_date),
+    CONSTRAINT availability_time_window_chk CHECK (
+        (start_time IS NULL AND end_time IS NULL)
+        OR (start_time IS NOT NULL AND end_time IS NOT NULL AND start_time < end_time)
+    )
 );
 
 -- leave_requests

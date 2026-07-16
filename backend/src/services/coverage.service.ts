@@ -14,7 +14,12 @@
  */
 
 import supabaseAdmin from '../lib/supabase';
-import { timeToMinutes, shiftDurationMinutes } from './scheduling/filter';
+import {
+  timeToMinutes,
+  shiftDurationMinutes,
+  overlapMinutes,
+  availabilityEndMinutes,
+} from './scheduling/filter';
 
 interface AffectedAssignment {
   assignment_id: number;
@@ -129,6 +134,61 @@ export async function raiseHalfDayGapFlags(
         `${staffName} is unavailable for the ${blockedHalf.toUpperCase()} half of ${workDate} (${source}) ` +
         `but is assigned to the ${a.service_type} ${a.crew_position} slot ${a.start_time}–${a.end_time}. ` +
         `A part-timer replacement is needed for the uncovered half.`,
+      status: 'active',
+      created_at: new Date().toISOString(),
+    });
+    raised++;
+  }
+
+  return raised;
+}
+
+/** Renders "HH:MM(:SS)" as "HH:MM" for flag messages. */
+function fmtTime(t: string): string {
+  return t.slice(0, 5);
+}
+
+/**
+ * Raises half_day_gap flags for every assignment the staff member holds on
+ * workDate whose slot extends outside the [startTime, endTime) window they are
+ * now available for (time-range availability from the app's slider form).
+ *
+ * Returns the number of flags raised.
+ */
+export async function raiseAvailabilityWindowGapFlags(
+  staffId: number,
+  staffName: string,
+  workDate: string,
+  startTime: string,
+  endTime: string,
+  source: string
+): Promise<number> {
+  const availStart = timeToMinutes(startTime);
+  const availEnd = availabilityEndMinutes(endTime);
+  const assignments = await getAssignmentsOnDate(staffId, workDate);
+  let raised = 0;
+
+  for (const a of assignments) {
+    const slotStart = timeToMinutes(a.start_time);
+    // Overnight minutes past 24:00 belong to the next day — same-day check only,
+    // consistent with the eligibility filter.
+    const slotEnd = Math.min(slotStart + shiftDurationMinutes(a.start_time, a.end_time), 1440);
+    const outsideWindow =
+      overlapMinutes(slotStart, slotEnd, 0, availStart) > 0 ||
+      overlapMinutes(slotStart, slotEnd, availEnd, 1440) > 0;
+    if (!outsideWindow) continue;
+    if (await flagAlreadyActive(a.slot_id, staffId, 'half_day_gap')) continue;
+
+    await supabaseAdmin.from('flags').insert({
+      roster_id: a.roster_id,
+      slot_id: a.slot_id,
+      staff_id: staffId,
+      flag_type: 'half_day_gap',
+      severity: 'warning',
+      message:
+        `${staffName} is only available ${fmtTime(startTime)}–${fmtTime(endTime)} on ${workDate} (${source}) ` +
+        `but is assigned to the ${a.service_type} ${a.crew_position} slot ${a.start_time}–${a.end_time}. ` +
+        `A replacement is needed for the uncovered hours.`,
       status: 'active',
       created_at: new Date().toISOString(),
     });
