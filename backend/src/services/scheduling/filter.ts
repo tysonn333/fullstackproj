@@ -59,6 +59,8 @@ export interface StaffCandidate {
   employment_type: 'full_time' | 'part_time';
   status: 'active' | 'inactive';
   home_postal?: string | null;
+  /** Management staff (UC-004 A2): overflow only — never auto-assigned. */
+  is_management?: boolean;
 }
 
 export interface FilterResult {
@@ -67,6 +69,8 @@ export interface FilterResult {
   role: StaffRole;
   employment_type: 'full_time' | 'part_time';
   home_postal: string | null;
+  /** Management staff (UC-004 A2): eligible for MANUAL assignment only. */
+  is_management?: boolean;
   eligible: boolean;
   hard_blocked: boolean;
   block_reason?: string;
@@ -409,6 +413,7 @@ export async function filterCandidates(
       role: candidate.role,
       employment_type: candidate.employment_type,
       home_postal: candidate.home_postal ?? null,
+      is_management: candidate.is_management ?? false,
     };
 
     // Skip inactive staff immediately
@@ -587,10 +592,24 @@ export async function getEligibleCandidates(
   slot: ShiftSlot,
   rosterDate: string
 ): Promise<FilterResult[]> {
-  const { data: staffList, error } = await supabaseAdmin
+  // is_management is a later addition — fall back to a select without it so
+  // the engine keeps working against a database that predates the migration.
+  const withMgmt = await supabaseAdmin
     .from('staff')
-    .select('staff_id, full_name, role, employment_type, status, home_postal')
+    .select('staff_id, full_name, role, employment_type, status, home_postal, is_management')
     .eq('status', 'active');
+
+  let staffList: unknown[] | null = withMgmt.data;
+  let error = withMgmt.error;
+
+  if (error) {
+    const withoutMgmt = await supabaseAdmin
+      .from('staff')
+      .select('staff_id, full_name, role, employment_type, status, home_postal')
+      .eq('status', 'active');
+    staffList = withoutMgmt.data;
+    error = withoutMgmt.error;
+  }
 
   if (error) throw new Error(`Failed to fetch staff: ${error.message}`);
 

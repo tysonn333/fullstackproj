@@ -31,6 +31,11 @@ CREATE TABLE staff (
     employment_type VARCHAR(20) NOT NULL
                     CHECK (employment_type IN ('full_time', 'part_time')),
     home_postal     VARCHAR(10),
+    -- Management staff (UC-004 A2 / UC-002 A6): qualified overflow only.
+    -- The generator never auto-assigns them; when they are the only ones who
+    -- pass all filters, a "management deployment required" flag is raised and
+    -- the admin confirms the deployment manually.
+    is_management   BOOLEAN NOT NULL DEFAULT FALSE,
     status          VARCHAR(20) NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'inactive')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

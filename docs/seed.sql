@@ -74,6 +74,13 @@ INSERT INTO staff (full_name, phone, email, role, employment_type, home_postal, 
     ('Ryan Chen',     '+65 9100 0019', 'ryan.chen@efar.sg',     'paramedic', 'full_time', '270901', 'active'),
     ('Melissa Ong',   '+65 9100 0020', 'melissa.ong@efar.sg',   'paramedic', 'part_time', '550218', 'active');
 
+-- Management staff (UC-004 A2 / UC-002 A6): qualified overflow only. The
+-- generator never auto-assigns them; they surface via a "management deployment
+-- required" flag when nobody else passes the filters, and the admin confirms.
+INSERT INTO staff (full_name, phone, email, role, employment_type, home_postal, is_management, status) VALUES
+    ('Adrian Chia (Ops Manager)', '+65 9100 0021', 'adrian.chia@efar.sg', 'driver',    'full_time', '289610', TRUE, 'active'),
+    ('Dr. Elaine Foo (Med Dir)',  '+65 9100 0022', 'elaine.foo@efar.sg',  'paramedic', 'full_time', '259760', TRUE, 'active');
+
 -- -------------------------------------------------------------
 -- Staff Certifications
 -- MTS certification for everyone; EAS certification for drivers & paramedics.

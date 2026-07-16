@@ -11,7 +11,12 @@ jest.mock('../src/lib/supabase', () => ({
   default: { from: jest.fn() },
 }));
 
-import { peakConcurrentJobs, isWeekendOrPublicHoliday } from '../src/services/scheduling/generator';
+import {
+  peakConcurrentJobs,
+  isWeekendOrPublicHoliday,
+  coverageGapMessage,
+} from '../src/services/scheduling/generator';
+import { ShiftSlot } from '../src/services/scheduling/filter';
 
 describe('peakConcurrentJobs()', () => {
   it('returns 0 for no jobs', () => {
@@ -64,5 +69,39 @@ describe('isWeekendOrPublicHoliday()', () => {
   it('treats an ordinary weekday as a workday', () => {
     expect(isWeekendOrPublicHoliday('2026-07-13')).toBe(false); // Monday
     expect(isWeekendOrPublicHoliday('2026-07-15')).toBe(false); // Wednesday
+  });
+});
+
+describe('coverageGapMessage() — management deployment (UC-004 A2 / UC-002 A6)', () => {
+  const slot: ShiftSlot = {
+    slot_id: 7,
+    roster_id: 1,
+    ambulance_id: 2,
+    start_time: '06:00:00',
+    end_time: '18:00:00',
+    service_type: 'EAS',
+    crew_position: 'driver',
+  };
+
+  it('is a plain coverage-gap message when no management staff qualify', () => {
+    const msg = coverageGapMessage('driver', slot, []);
+    expect(msg).toBe('No eligible driver for EAS slot 7 (06:00:00–18:00:00)');
+    expect(msg).not.toContain('MANAGEMENT');
+  });
+
+  it('names qualified management staff for manual deployment', () => {
+    const msg = coverageGapMessage('driver', slot, [{ full_name: 'Adrian Chia (Ops Manager)' }]);
+    expect(msg).toContain('MANAGEMENT DEPLOYMENT REQUIRED');
+    expect(msg).toContain('Adrian Chia (Ops Manager)');
+    expect(msg).toContain('passes all filters');
+  });
+
+  it('pluralises correctly for multiple management candidates', () => {
+    const msg = coverageGapMessage('attendant', slot, [
+      { full_name: 'Adrian Chia' },
+      { full_name: 'Dr. Elaine Foo' },
+    ]);
+    expect(msg).toContain('Adrian Chia, Dr. Elaine Foo');
+    expect(msg).toContain('pass all filters');
   });
 });

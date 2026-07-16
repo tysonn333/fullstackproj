@@ -35,9 +35,9 @@ The EFAR Ambulance Scheduling System replaces a manual, spreadsheet-based roster
 | UC | What's implemented |
 |----|--------------------|
 | **UC-001** Roster view | Crew grid + timeline views, date navigation, weekend/PH banner, historical read-only mode, staff weekly-schedule drill-down, exceptions sidebar, and **A4 filters** (service type / role) that grey out non-matching rows |
-| **UC-002** Auto-generate | **Job-feed-driven generation**: call-centre CSV import (`POST /jobs/import` + Import Jobs UI), peak-concurrency demand → fleet size, **defer when no job list** (`NO_JOB_LIST` + skeleton fallback), **weekend/PH 2-ambulance baseline**, publish & lock |
-| **UC-003** Availability & leave | Leave request/approve/reject with duplicate-overlap blocking; availability form (full/half-day, date range); **approving half-day leave raises `half_day_gap` flags**; leave conflicting with a published roster raises **critical `coverage_gap` flags**; part-timer **WhatsApp webhook** with half-day gap detection (Chad) |
-| **UC-004** Filter (Guan Hee) | Five ordered filters with hard/soft semantics, real cert-expiry validation, per-candidate `filter_trace`, **post-late-shift rest soft rule** (pre-noon start after a late shift → `rest_violation` warning flag) |
+| **UC-002** Auto-generate | **Job-feed-driven generation**: call-centre CSV import (`POST /jobs/import` + Import Jobs UI), peak-concurrency demand → fleet size, **defer when no job list** (`NO_JOB_LIST` + skeleton fallback), **weekend/PH 2-ambulance baseline**, **management overflow (A6): never auto-assigned — an empty pool raises a "management deployment required" flag naming qualified management staff for manual confirmation**, publish & lock |
+| **UC-003** Availability & leave | Leave request/approve/reject with duplicate-overlap blocking; availability form (full/half-day, **00:00–23:59 time-range slider**); **approving half-day leave raises `half_day_gap` flags**; leave conflicting with a published roster raises **critical `coverage_gap` flags**; part-timer **WhatsApp webhook** (Chad) understands **relative dates ("today"/"tmr"), date ranges (one row per day), and time windows ("1pm-7pm") mapped to the same start/end columns as the slider**, replies with a confirmation (or usage help), and raises half-day/coverage-gap flags |
+| **UC-004** Filter (Guan Hee) | Five ordered filters with hard/soft semantics, real cert-expiry validation, per-candidate `filter_trace`, **post-late-shift rest soft rule** (pre-noon start after a late shift → `rest_violation` warning flag), **management staff carried through as manual-deployment-only candidates (A2)** |
 | **UC-005** Rank & assign (Guan Hee) | 6-component composite score (fairness/rest/proximity/cert-fit/preference/continuity), **env-configurable weights** (`RANK_WEIGHT_*`, auto-normalised), SG postal-district proximity, driver+attendant pairing with proximity walk-down, **buddy preference honoured within top-3** |
 | **UC-006** Last-minute change | Drop → ranked replacements → confirm swap; **absent-all-day batch drop** (every shift cancelled + flagged); filling a slot **auto-resolves** its gap flags |
 | **UC-007** Staff profiles | CRUD + certifications; **shift-time & buddy preferences UI**; **expiring-certs alert banner** (30-day window; expired certs are already excluded by UC-004 Filter 5) |
@@ -191,6 +191,15 @@ This creates all tables, constraints, and indexes.
 > differentiate them. Run `docs/migrations/2026-07-16-backfill-home-postals.sql`
 > to assign every staff member a realistic postal code spread across ~20
 > districts island-wide (deterministic by staff ID — safe to re-run).
+>
+> **Availability time-range slider fails to save?** Your `availability` table
+> predates the time-window columns. Run
+> `docs/migrations/2026-07-16-availability-time-range.sql`.
+>
+> **Management overflow (UC-002 A6)?** Run
+> `docs/migrations/2026-07-16-management-staff.sql` to add `staff.is_management`
+> (and optionally two demo management staff). Management staff are never
+> auto-rostered; they surface in "management deployment required" flags.
 
 ### 2. Seed initial data (optional)
 

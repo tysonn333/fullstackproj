@@ -209,7 +209,7 @@ router.post('/slots/:id/assign', requireAdmin, async (req: AuthenticatedRequest,
     await autoResolveSlotFlags(slotId);
 
     // Raise soft-rule flags if applicable (advisory only — never blocking)
-    if (candidate.consecutive_days_flag || candidate.late_shift_rest_flag) {
+    if (candidate.consecutive_days_flag || candidate.late_shift_rest_flag || candidate.is_management) {
       const { data: rosterRow } = await supabaseAdmin
         .from('shift_slots')
         .select('roster_id')
@@ -217,13 +217,13 @@ router.post('/slots/:id/assign', requireAdmin, async (req: AuthenticatedRequest,
         .single();
 
       if (rosterRow) {
-        const softFlag = (flag_type: string, message: string) =>
+        const softFlag = (flag_type: string, message: string, severity: 'warning' | 'info' = 'warning') =>
           supabaseAdmin.from('flags').insert({
             roster_id: rosterRow.roster_id,
             slot_id: slotId,
             staff_id,
             flag_type,
-            severity: 'warning',
+            severity,
             message,
             status: 'active',
             created_at: new Date().toISOString(),
@@ -239,6 +239,15 @@ router.post('/slots/:id/assign', requireAdmin, async (req: AuthenticatedRequest,
           await softFlag(
             'rest_violation',
             `Staff ${candidate.full_name} starts before 12:00 right after a late shift — recommend a later start (soft rule)`
+          );
+        }
+        if (candidate.is_management) {
+          // UC-002 A6: management deployment is admin-confirmed — leave an
+          // auditable record in the exceptions panel.
+          await softFlag(
+            'other',
+            `Management deployment: ${candidate.full_name} (management staff) was manually assigned to this slot by an admin`,
+            'info'
           );
         }
       }

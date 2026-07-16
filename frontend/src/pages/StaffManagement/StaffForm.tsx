@@ -70,6 +70,8 @@ export const StaffForm: React.FC<StaffFormProps> = ({ staff, onSave, onCancel })
   const [prefersLate, setPrefersLate] = useState(false);
   const [buddyId, setBuddyId] = useState<string>('');
   const [buddyOptions, setBuddyOptions] = useState<Staff[]>([]);
+  // UC-002 A6: management staff are overflow only — never auto-rostered.
+  const [isManagement, setIsManagement] = useState(false);
 
   useEffect(() => {
     if (staff) {
@@ -82,8 +84,10 @@ export const StaffForm: React.FC<StaffFormProps> = ({ staff, onSave, onCancel })
         home_postal: staff.home_postal,
         status: staff.status,
       });
+      setIsManagement(staff.is_management ?? false);
     } else {
       setForm(INITIAL_FORM);
+      setIsManagement(false);
     }
     setErrors({});
   }, [staff]);
@@ -139,6 +143,7 @@ export const StaffForm: React.FC<StaffFormProps> = ({ staff, onSave, onCancel })
         employment_type: form.employment_type as EmploymentType,
         home_postal: form.home_postal.trim(),
         status: form.status,
+        is_management: isManagement,
       };
 
       let savedStaff: Staff;
@@ -280,6 +285,26 @@ export const StaffForm: React.FC<StaffFormProps> = ({ staff, onSave, onCancel })
             </select>
           </div>
         )}
+
+        {/* Management overflow (UC-002 A6) */}
+        <div className="form-group col-span-2">
+          <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isManagement}
+              onChange={(e) => setIsManagement(e.target.checked)}
+              className="w-4 h-4 mt-0.5 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+            />
+            <span>
+              <span className="font-medium">Management staff (overflow only)</span>
+              <span className="block text-xs text-gray-500">
+                Never auto-rostered. When nobody else passes the eligibility filters, a
+                &ldquo;management deployment required&rdquo; flag names them and an admin
+                deploys them manually.
+              </span>
+            </span>
+          </label>
+        </div>
       </div>
 
       {/* Scheduling preferences (UC-005 soft signals) */}

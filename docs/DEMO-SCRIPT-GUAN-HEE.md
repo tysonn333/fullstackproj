@@ -98,7 +98,7 @@ Say (pairing — no UI needed, describe it):
 
 ## 6. Close (20 seconds)
 
-> "Everything I showed is covered by **143 automated backend tests** — every filter stage, the scoring math, the tie-breakers, and the pairing algorithm — so the engine's behaviour is verified, not just demonstrated. The design principle throughout: **never a black box** — every decision shows its working."
+> "Everything I showed is covered by **173 automated backend tests** — every filter stage, the scoring math, the tie-breakers, and the pairing algorithm — so the engine's behaviour is verified, not just demonstrated. The design principle throughout: **never a black box** — every decision shows its working."
 
 ---
 
@@ -115,6 +115,7 @@ A: Implemented as a **soft rule** in the filter pipeline (step 2b): if a candida
 
 **Q: What happens when NOBODY passes the filters?**
 A: The slot stays unfilled, and the generator raises a **critical coverage-gap flag** in the Exceptions panel instead of silently assigning someone unsafe. The admin resolves it via Find Replacement or by importing more staff. (Common real cause: expired certifications — Filter 5 is strict; there's a migration and auto-provisioning that fixes it.)
+And there's an escalation path (UC-004 A2): staff marked **management** pass the same filters but are **never auto-assigned** — if they're the only ones who qualify, the flag says "**management deployment required**" and names them, so the admin deploys management deliberately, never by accident.
 
 **Q: How do you prevent an admin from overriding into an illegal state?**
 A: The assign/reassign endpoints re-run the UC-004 filter server-side before writing. A hard-blocked candidate returns HTTP 422 with the block reason. The frontend can't bypass it.
@@ -138,4 +139,4 @@ Draw on the whiteboard: **20 staff → [5 filters] → 8 eligible → [6-factor 
 - [ ] A roster generated for **today** (do it before class — don't gamble on live Wi-Fi)
 - [ ] One staff member you can safely mark Unavailable (know their name in advance)
 - [ ] Employee login ready in an incognito window
-- [ ] `npm test` run that morning — say "143 passing" with confidence
+- [ ] `npm test` run that morning — say "173 passing" with confidence

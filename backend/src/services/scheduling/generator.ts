@@ -15,7 +15,9 @@
  *        • assign both, updating running hours/shift counters (via the DB) so
  *          later slots reflect the new state.
  *   5. Where a pool is empty, leave that slot unassigned and raise a
- *      coverage_gap flag; where no proximity-compatible pair exists, assign the
+ *      coverage_gap flag — naming any qualified MANAGEMENT staff (UC-002 A6:
+ *      management is overflow only, deployed manually by the admin, never
+ *      auto-assigned); where no proximity-compatible pair exists, assign the
  *      best pair and raise a proximity flag.
  *   6. Raise soft-rule flags for any assigned staff: consecutive_days at
  *      >= 7 days, and rest_violation for a pre-noon start after a late shift.
@@ -217,6 +219,29 @@ async function rankedPoolForPosition(
   return rankCandidates(roleScoped, slot, rosterDate);
 }
 
+/**
+ * Coverage-gap message for a slot no regular staff can fill (UC-004 A2 /
+ * UC-002 A6). When qualified MANAGEMENT staff pass all filters, the flag
+ * names them so the admin can confirm the deployment deliberately — the
+ * generator itself never auto-assigns management.
+ */
+export function coverageGapMessage(
+  position: 'driver' | 'attendant',
+  slot: ShiftSlot,
+  managementCandidates: Array<{ full_name: string }>
+): string {
+  const where = `${slot.service_type} slot ${slot.slot_id} (${slot.start_time}–${slot.end_time})`;
+  if (managementCandidates.length === 0) {
+    return `No eligible ${position} for ${where}`;
+  }
+  const names = managementCandidates.map((m) => m.full_name).join(', ');
+  return (
+    `No eligible regular ${position} for ${where} — MANAGEMENT DEPLOYMENT REQUIRED: ` +
+    `${names} pass${managementCandidates.length === 1 ? 'es' : ''} all filters and can be assigned manually ` +
+    `via Find Replacement / the ranking modal`
+  );
+}
+
 async function assignStaffToSlot(
   slotId: number,
   candidate: RankedCandidate
@@ -413,12 +438,20 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
 
   for (const group of orderedGroups) {
     try {
-      const rankedDrivers = group.driverSlot
+      const rankedDriversAll = group.driverSlot
         ? await rankedPoolForPosition(group.driverSlot, rosterDate, DRIVER_ROLES)
         : [];
-      const rankedAttendants = group.attendantSlot
+      const rankedAttendantsAll = group.attendantSlot
         ? await rankedPoolForPosition(group.attendantSlot, rosterDate, ATTENDANT_ROLES)
         : [];
+
+      // Management staff are overflow only (UC-002 A6): they never enter the
+      // auto-assignment pools, but when a pool would otherwise be empty they
+      // are named in the coverage-gap flag for the admin to deploy manually.
+      const rankedDrivers = rankedDriversAll.filter((c) => !c.is_management);
+      const mgmtDrivers = rankedDriversAll.filter((c) => c.is_management);
+      const rankedAttendants = rankedAttendantsAll.filter((c) => !c.is_management);
+      const mgmtAttendants = rankedAttendantsAll.filter((c) => c.is_management);
 
       const pair = pairCrew(rankedDrivers, rankedAttendants, buddyMap);
 
@@ -470,7 +503,7 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
             null,
             'coverage_gap',
             'critical',
-            `No eligible driver for ${group.service_type} slot ${group.driverSlot.slot_id} (${group.driverSlot.start_time}–${group.driverSlot.end_time})`
+            coverageGapMessage('driver', group.driverSlot, mgmtDrivers)
           );
           flagsRaised++;
         }
@@ -493,7 +526,7 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
             null,
             'coverage_gap',
             'critical',
-            `No eligible attendant for ${group.service_type} slot ${group.attendantSlot.slot_id} (${group.attendantSlot.start_time}–${group.attendantSlot.end_time})`
+            coverageGapMessage('attendant', group.attendantSlot, mgmtAttendants)
           );
           flagsRaised++;
         }

@@ -298,6 +298,14 @@ export const StaffManagement: React.FC = () => {
                       {/* Role */}
                       <td>
                         <span className={`badge capitalize ${roleColors[s.role]}`}>{s.role}</span>
+                        {s.is_management && (
+                          <span
+                            className="badge text-xs bg-purple-100 text-purple-700 ml-1"
+                            title="Management staff — overflow only, never auto-rostered"
+                          >
+                            MGMT
+                          </span>
+                        )}
                       </td>
 
                       {/* Employment type */}

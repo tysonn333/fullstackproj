@@ -2,7 +2,11 @@ import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
 import { authenticate, ensureSelfOrAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { logAudit } from '../services/audit.service';
-import { parseWhatsAppMessage } from '../integrations/whatsapp';
+import {
+  parseWhatsAppMessage,
+  formatWhatsAppResponse,
+  WHATSAPP_HELP_MESSAGE,
+} from '../integrations/whatsapp';
 import {
   raiseHalfDayGapFlags,
   raiseFullDayConflictFlags,
@@ -194,9 +198,16 @@ router.post(
 
 /**
  * POST /api/v1/integrations/whatsapp/webhook
- * Receives WhatsApp messages and parses availability updates.
+ * Receives WhatsApp messages and parses availability updates (UC-003 A2).
+ * Understands relative dates ("today", "tmr"), date ranges ("20/07 to 22/07"
+ * — one availability row per day), and time windows ("free 1pm-7pm") which
+ * map onto the same start/end columns the app's time-range slider writes.
+ * The `reply` field is the confirmation (or help) text to send back to the
+ * sender; unparseable messages get usage examples instead of silence.
  * This endpoint intentionally has no auth — it is secured by verifying the sender's phone.
  */
+const WHATSAPP_MAX_DAYS = 14;
+
 router.post('/integrations/whatsapp/webhook', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const { from, message, timestamp } = req.body;
@@ -220,66 +231,106 @@ router.post('/integrations/whatsapp/webhook', async (req: AuthenticatedRequest, 
       return;
     }
 
-    // Parse the message for availability intent
-    const parsed = parseWhatsAppMessage(message);
-
-    if (!parsed) {
-      res.json({ received: true, processed: false, reason: 'Could not parse availability from message' });
-      return;
-    }
-
     const msgDate = timestamp
       ? new Date(timestamp).toISOString().split('T')[0]
       : new Date().toISOString().split('T')[0];
 
-    const workDate = parsed.date ?? msgDate;
+    // Parse the message for availability intent ("today"/"tmr" resolve
+    // against the message timestamp, not the server's processing time).
+    const parsed = parseWhatsAppMessage(message, msgDate);
 
-    const { data: avail, error: availErr } = await supabaseAdmin
-      .from('availability')
-      .upsert(
-        {
-          staff_id: staff.staff_id,
-          work_date: workDate,
-          is_available: parsed.is_available,
-          half_day: parsed.half_day ?? null,
-          // WhatsApp only carries AM/PM granularity — clear any stale window
-          // a previous app submission left on this day. The raw text doubles
-          // as the unavailability reason for admins.
-          start_time: null,
-          end_time: null,
-          reason: parsed.is_available ? null : String(message).slice(0, 500),
-          source: 'whatsapp',
-          created_at: new Date().toISOString(),
-        },
-        { onConflict: 'staff_id,work_date' }
-      )
-      .select()
-      .single();
+    if (!parsed) {
+      res.json({
+        received: true,
+        processed: false,
+        reason: 'Could not parse availability from message',
+        reply: WHATSAPP_HELP_MESSAGE,
+      });
+      return;
+    }
 
-    if (availErr) throw availErr;
+    // A message with no date means "for the day I sent this".
+    const allDates = parsed.dates && parsed.dates.length > 0 ? parsed.dates : [msgDate];
+    const workDates = allDates.slice(0, WHATSAPP_MAX_DAYS);
+    const truncated = allDates.length - workDates.length;
 
-    // Chad (UC-003 A2): part-timer half-day availability via WhatsApp can
-    // create a staffing gap on an already-crewed slot — flag it immediately.
-    const flagsRaised = await detectCoverageGaps(
-      staff.staff_id,
+    const window =
+      parsed.start_time && parsed.end_time
+        ? { start: parsed.start_time, end: parsed.end_time }
+        : null;
+    const halfDay = window ? null : parsed.half_day ?? null;
+    const reason = parsed.is_available ? null : String(message).slice(0, 500);
+
+    const availabilityIds: number[] = [];
+    let flagsRaised = 0;
+
+    for (const workDate of workDates) {
+      const { data: avail, error: availErr } = await supabaseAdmin
+        .from('availability')
+        .upsert(
+          {
+            staff_id: staff.staff_id,
+            work_date: workDate,
+            is_available: parsed.is_available,
+            half_day: halfDay,
+            // A parsed window ("1pm-7pm") writes the same columns as the
+            // app's time-range slider; otherwise clear any stale window a
+            // previous submission left on this day. The raw text doubles as
+            // the unavailability reason for admins.
+            start_time: window?.start ?? null,
+            end_time: window?.end ?? null,
+            reason,
+            source: 'whatsapp',
+            created_at: new Date().toISOString(),
+          },
+          { onConflict: 'staff_id,work_date' }
+        )
+        .select()
+        .single();
+
+      if (availErr) throw availErr;
+      availabilityIds.push(avail.availability_id);
+
+      // Chad (UC-003 A2): reduced availability via WhatsApp can strand an
+      // already-crewed slot — flag each affected day immediately.
+      flagsRaised += await detectCoverageGaps(
+        staff.staff_id,
+        staff.full_name,
+        workDate,
+        parsed.is_available,
+        halfDay,
+        window?.start ?? null,
+        window?.end ?? null,
+        reason,
+        'WhatsApp availability'
+      );
+    }
+
+    let reply = formatWhatsAppResponse(
       staff.full_name,
-      workDate,
+      workDates,
       parsed.is_available,
-      parsed.half_day ?? null,
-      null,
-      null,
-      parsed.is_available ? null : String(message).slice(0, 500),
-      'WhatsApp availability'
+      halfDay,
+      window
     );
+    if (truncated > 0) {
+      reply += ` (Note: only the first ${WHATSAPP_MAX_DAYS} days were recorded — please send the remaining ${truncated} day${truncated === 1 ? '' : 's'} separately.)`;
+    }
 
     res.json({
       received: true,
       processed: true,
-      availability_id: avail.availability_id,
+      availability_id: availabilityIds[0],
+      availability_ids: availabilityIds,
       staff_id: staff.staff_id,
-      work_date: workDate,
+      work_date: workDates[0],
+      work_dates: workDates,
+      days_processed: workDates.length,
       is_available: parsed.is_available,
+      start_time: window?.start ?? null,
+      end_time: window?.end ?? null,
       flags_raised: flagsRaised,
+      reply,
     });
   } catch (err) {
     next(err);

@@ -12,6 +12,8 @@ export interface Staff {
   role: StaffRole;
   employment_type: EmploymentType;
   home_postal: string;
+  /** Management staff (UC-002 A6): overflow only, never auto-assigned. */
+  is_management?: boolean;
   status: StaffStatus;
   created_at: string;
   updated_at: string;

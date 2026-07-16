@@ -769,4 +769,16 @@ describe('filterCandidates() — filter_trace', () => {
     expect(results[0].home_postal).toBe('310450');
     expect(results[0].employment_type).toBe('part_time');
   });
+
+  it('carries is_management through so callers can separate overflow staff (UC-004 A2)', async () => {
+    const results = await filterCandidates(baseSlot, rosterDate, [
+      makeCandidate({ staff_id: 1, role: 'medic' }),
+      makeCandidate({ staff_id: 2, role: 'medic', is_management: true }),
+    ]);
+    expect(results[0].is_management).toBe(false);
+    expect(results[1].is_management).toBe(true);
+    // Management staff still pass the filters — they are excluded from
+    // AUTO-assignment by the generator, not from eligibility.
+    expect(results[1].eligible).toBe(true);
+  });
 });

@@ -34,6 +34,8 @@ export interface EngineCandidate {
   consecutive_days_count: number;
   /** Soft flag: pre-noon start straight after a late shift (soft rest rule). */
   late_shift_rest_flag?: boolean;
+  /** Management staff (UC-002 A6): manual deployment only. */
+  is_management?: boolean;
   filter_trace: FilterStep[];
 }
 

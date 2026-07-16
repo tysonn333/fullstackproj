@@ -128,7 +128,7 @@ router.get('/expiring-certs', async (req: AuthenticatedRequest, res: Response, n
  */
 router.post('/', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const { full_name, phone, email, role, employment_type, home_postal } = req.body;
+    const { full_name, phone, email, role, employment_type, home_postal, is_management } = req.body;
 
     if (!full_name || !role || !employment_type) {
       res.status(400).json({ error: 'full_name, role, and employment_type are required' });
@@ -148,9 +148,15 @@ router.post('/', requireAdmin, async (req: AuthenticatedRequest, res: Response, 
     }
 
     const now = new Date().toISOString();
+    const insertPayload: Record<string, unknown> = {
+      full_name, phone, email, role, employment_type, home_postal, status: 'active', created_at: now, updated_at: now,
+    };
+    // Only include the flag when explicitly sent, so creation still works
+    // against a database that predates the is_management migration.
+    if (is_management !== undefined) insertPayload.is_management = Boolean(is_management);
     const { data, error } = await supabaseAdmin
       .from('staff')
-      .insert({ full_name, phone, email, role, employment_type, home_postal, status: 'active', created_at: now, updated_at: now })
+      .insert(insertPayload)
       .select()
       .single();
 
@@ -208,7 +214,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFu
 router.put('/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const staffId = parseInt(req.params.id, 10);
-    const { full_name, phone, email, role, employment_type, home_postal, status } = req.body;
+    const { full_name, phone, email, role, employment_type, home_postal, status, is_management } = req.body;
 
     const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (full_name !== undefined) updatePayload.full_name = full_name;
@@ -218,6 +224,7 @@ router.put('/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response
     if (employment_type !== undefined) updatePayload.employment_type = employment_type;
     if (home_postal !== undefined) updatePayload.home_postal = home_postal;
     if (status !== undefined) updatePayload.status = status;
+    if (is_management !== undefined) updatePayload.is_management = Boolean(is_management);
 
     const { data, error } = await supabaseAdmin
       .from('staff')

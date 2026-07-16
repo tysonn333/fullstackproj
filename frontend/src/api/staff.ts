@@ -44,6 +44,7 @@ interface StaffRow {
   role: Staff['role'];
   employment_type: Staff['employment_type'];
   home_postal: string | null;
+  is_management?: boolean;
   status: string;
   created_at: string;
   updated_at: string;
@@ -69,6 +70,7 @@ export function mapStaff(row: StaffRow): Staff {
     role: row.role,
     employment_type: row.employment_type,
     home_postal: row.home_postal ?? '',
+    is_management: row.is_management ?? false,
     status: row.status as Staff['status'],
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -120,6 +122,7 @@ export const staffApi = {
       role: payload.role,
       employment_type: payload.employment_type,
       home_postal: payload.home_postal,
+      ...(payload.is_management !== undefined ? { is_management: payload.is_management } : {}),
     };
     const { data } = await apiClient.post<{ data: StaffRow }>('/api/v1/staff', body);
     return mapStaff(data.data);
@@ -137,6 +140,7 @@ export const staffApi = {
     if (payload.employment_type !== undefined) body.employment_type = payload.employment_type;
     if (payload.home_postal !== undefined) body.home_postal = payload.home_postal;
     if (payload.status !== undefined) body.status = payload.status;
+    if (payload.is_management !== undefined) body.is_management = payload.is_management;
     const { data } = await apiClient.put<{ data: StaffRow }>(`/api/v1/staff/${id}`, body);
     return mapStaff(data.data);
   },
