@@ -179,8 +179,8 @@ This creates all tables, constraints, and indexes.
 > **Everyone shows the same distance from base (or "distance unknown")?** Your
 > staff rows are missing valid Singapore postal codes, so UC-005 proximity can't
 > differentiate them. Run `docs/migrations/2026-07-16-backfill-home-postals.sql`
-> to assign realistic postals spread across the island (staff with a valid
-> postal are left untouched).
+> to assign every staff member a realistic postal code spread across ~20
+> districts island-wide (deterministic by staff ID — safe to re-run).
 
 ### 2. Seed initial data (optional)
 
