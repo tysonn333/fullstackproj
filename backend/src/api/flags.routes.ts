@@ -99,12 +99,17 @@ router.put('/:id/resolve', requireAdmin, async (req: AuthenticatedRequest, res: 
 
 /**
  * PUT /api/v1/flags/:id/dismiss
- * Body: { reason? }
+ * Body: { reason } — a reason of >= 10 characters is required (Chad UC-008).
  */
 router.put('/:id/dismiss', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const flagId = parseInt(req.params.id, 10);
-    const { reason } = req.body;
+    const reason: string = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+
+    if (reason.length < 10) {
+      res.status(422).json({ error: 'A reason of at least 10 characters is required to dismiss a flag' });
+      return;
+    }
 
     const { data: flag, error: fetchErr } = await supabaseAdmin
       .from('flags')
@@ -129,6 +134,7 @@ router.put('/:id/dismiss', requireAdmin, async (req: AuthenticatedRequest, res: 
         status: 'dismissed',
         resolved_at: now,
         resolved_by: req.user!.id,
+        resolution_note: reason,
       })
       .eq('flag_id', flagId)
       .select()
@@ -408,19 +414,21 @@ router.post('/:id/notify', requireAdmin, async (req: AuthenticatedRequest, res: 
 
 /**
  * POST /api/v1/flags/bulk-action
- * Body: { flag_ids: number[], action: 'resolve'|'dismiss'|'reject'|'reopen', reason? }
- * reject requires a reason of >= 10 characters (Chad UC-008).
+ * Body: { flag_ids: number[], action: 'resolve'|'dismiss'|'defer'|'reject'|'reopen', reason?, deferred_until? }
+ * dismiss/reject require a reason of >= 10 characters; defer requires
+ * deferred_until (YYYY-MM-DD) (Chad UC-008).
  */
-const BULK_ACTIONS: Record<string, { newStatus: string; from: string[]; terminal: boolean }> = {
-  resolve: { newStatus: 'resolved', from: ['active', 'deferred'], terminal: true },
-  dismiss: { newStatus: 'dismissed', from: ['active', 'deferred'], terminal: true },
-  reject: { newStatus: 'rejected', from: ['active', 'deferred'], terminal: true },
-  reopen: { newStatus: 'active', from: ['resolved', 'dismissed', 'rejected', 'deferred'], terminal: false },
+const BULK_ACTIONS: Record<string, { newStatus: string; from: string[]; kind: 'terminal' | 'defer' | 'reopen' }> = {
+  resolve: { newStatus: 'resolved', from: ['active', 'deferred'], kind: 'terminal' },
+  dismiss: { newStatus: 'dismissed', from: ['active', 'deferred'], kind: 'terminal' },
+  reject: { newStatus: 'rejected', from: ['active', 'deferred'], kind: 'terminal' },
+  defer: { newStatus: 'deferred', from: ['active'], kind: 'defer' },
+  reopen: { newStatus: 'active', from: ['resolved', 'dismissed', 'rejected', 'deferred'], kind: 'reopen' },
 };
 
 router.post('/bulk-action', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const { flag_ids, action, reason } = req.body;
+    const { flag_ids, action, reason, deferred_until } = req.body;
 
     if (!Array.isArray(flag_ids) || flag_ids.length === 0) {
       res.status(400).json({ error: 'flag_ids must be a non-empty array' });
@@ -438,16 +446,27 @@ router.post('/bulk-action', requireAdmin, async (req: AuthenticatedRequest, res:
       return;
     }
 
-    if (action === 'reject' && (typeof reason !== 'string' || reason.trim().length < 10)) {
-      res.status(422).json({ error: 'A reason of at least 10 characters is required to reject flags' });
+    if (
+      (action === 'reject' || action === 'dismiss') &&
+      (typeof reason !== 'string' || reason.trim().length < 10)
+    ) {
+      res.status(422).json({ error: `A reason of at least 10 characters is required to ${action} flags` });
+      return;
+    }
+
+    if (action === 'defer' && (!deferred_until || !/^\d{4}-\d{2}-\d{2}$/.test(String(deferred_until)))) {
+      res.status(422).json({ error: 'A defer date (deferred_until, YYYY-MM-DD) is required' });
       return;
     }
 
     const now = new Date().toISOString();
     const update: Record<string, unknown> = { status: spec.newStatus };
-    if (spec.terminal) {
+    if (spec.kind === 'terminal') {
       update.resolved_at = now;
       update.resolved_by = req.user!.id;
+      if (typeof reason === 'string' && reason.trim()) update.resolution_note = reason.trim();
+    } else if (spec.kind === 'defer') {
+      update.deferred_until = deferred_until;
       if (typeof reason === 'string' && reason.trim()) update.resolution_note = reason.trim();
     } else {
       // reopen — clear terminal / deferral bookkeeping

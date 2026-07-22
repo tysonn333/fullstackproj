@@ -172,6 +172,16 @@ export const flagsApi = {
     return { dismissed: data.updated_count ?? 0 };
   },
 
+  bulkDefer: async (ids: string[], deferredUntil: string, reason?: string): Promise<{ deferred: number }> => {
+    const { data } = await apiClient.post<{ updated_count: number }>('/api/v1/flags/bulk-action', {
+      flag_ids: ids.map(Number),
+      action: 'defer',
+      deferred_until: deferredUntil,
+      reason,
+    });
+    return { deferred: data.updated_count ?? 0 };
+  },
+
   exportCsv: async (filters?: FlagFilters): Promise<Blob> => {
     const params = new URLSearchParams();
     params.set('format', 'csv');

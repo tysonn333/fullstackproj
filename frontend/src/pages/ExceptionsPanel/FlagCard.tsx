@@ -57,7 +57,7 @@ const statusBadge: Record<string, string> = {
 
 // Actions that need a typed reason, and the minimum length required.
 type FlagAction = 'resolve' | 'dismiss' | 'defer' | 'reject' | 'reopen';
-const REASON_MIN: Record<string, number> = { reject: 10 };
+const REASON_MIN: Record<string, number> = { dismiss: 10, reject: 10 };
 
 export const FlagCard: React.FC<FlagCardProps> = ({
   flag,
@@ -98,7 +98,7 @@ export const FlagCard: React.FC<FlagCardProps> = ({
   };
 
   const reasonMin = action ? REASON_MIN[action] ?? 0 : 0;
-  const reasonOk = action === 'reject' ? reason.trim().length >= reasonMin : reason.trim().length > 0;
+  const reasonOk = reasonMin > 0 ? reason.trim().length >= reasonMin : reason.trim().length > 0;
   const deferOk = action !== 'defer' || Boolean(deferUntil);
 
   const handleAction = async () => {
@@ -108,9 +108,9 @@ export const FlagCard: React.FC<FlagCardProps> = ({
         toastError('Date required', 'Please pick a date to defer this flag until.');
         return;
       }
-    } else if (action === 'reject') {
-      if (reason.trim().length < REASON_MIN.reject) {
-        toastError('Reason too short', `Please provide at least ${REASON_MIN.reject} characters.`);
+    } else if (reasonMin > 0) {
+      if (reason.trim().length < reasonMin) {
+        toastError('Reason too short', `Please provide at least ${reasonMin} characters.`);
         return;
       }
     } else if (!reason.trim()) {
@@ -369,7 +369,7 @@ export const FlagCard: React.FC<FlagCardProps> = ({
             <div className="bg-gray-50 rounded-xl p-3 space-y-2">
               <p className="text-xs font-semibold text-gray-700">
                 {action === 'resolve' && '✅ Resolving flag — reason required'}
-                {action === 'dismiss' && '× Dismissing flag — reason required'}
+                {action === 'dismiss' && `× Dismissing flag — reason (min ${REASON_MIN.dismiss} chars) required`}
                 {action === 'defer' && '⏰ Deferring flag — pick a date'}
                 {action === 'reject' && `⊘ Rejecting flag — reason (min ${REASON_MIN.reject} chars) required`}
               </p>
@@ -390,9 +390,9 @@ export const FlagCard: React.FC<FlagCardProps> = ({
                 placeholder={action === 'defer' ? 'Optional note...' : 'Enter reason...'}
                 autoFocus={action !== 'defer'}
               />
-              {action === 'reject' && reason.trim().length > 0 && reason.trim().length < REASON_MIN.reject && (
+              {reasonMin > 0 && reason.trim().length > 0 && reason.trim().length < reasonMin && (
                 <p className="text-xs text-amber-600">
-                  {REASON_MIN.reject - reason.trim().length} more character(s) needed.
+                  {reasonMin - reason.trim().length} more character(s) needed.
                 </p>
               )}
               <div className="flex gap-2">

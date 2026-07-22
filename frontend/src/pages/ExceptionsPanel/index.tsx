@@ -103,7 +103,7 @@ export const ExceptionsPanel: React.FC = () => {
     }
   };
 
-  const handleBulkComplete = (_action: 'resolve' | 'dismiss', _count: number) => {
+  const handleBulkComplete = (_action: 'resolve' | 'defer' | 'dismiss', _count: number) => {
     setSelectedIds(new Set());
     setBulkMode(false);
     loadFlags(false);
