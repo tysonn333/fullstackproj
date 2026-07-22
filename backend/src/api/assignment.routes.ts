@@ -343,7 +343,7 @@ router.post('/:id/reassign', async (req: AuthenticatedRequest, res: Response, ne
     // (UNIQUE(slot_id)), possibly cancelled after a drop.
     const { data: currentAssignment } = await supabaseAdmin
       .from('assignments')
-      .select('*')
+      .select('*, staff:staff_id(full_name)')
       .eq('slot_id', slot_id)
       .single();
 
@@ -410,7 +410,9 @@ router.post('/:id/reassign', async (req: AuthenticatedRequest, res: Response, ne
         roster_id: rosterId,
         slot_id,
         previous_staff_id: currentAssignment?.staff_id,
+        previous_staff_name: (currentAssignment as unknown as { staff?: { full_name: string } })?.staff?.full_name,
         new_staff_id,
+        new_staff_name: newCandidate.full_name,
         reason: reason ?? '',
       },
     });

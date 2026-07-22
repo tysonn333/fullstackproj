@@ -106,6 +106,7 @@ export const Navbar: React.FC = () => {
         { to: '/availability', label: 'Availability & Leave', icon: <ClockIcon /> },
         { to: '/exceptions', label: 'Exceptions', icon: <ExclamationIcon /> },
         { to: '/last-minute', label: 'Last-Minute Changes', icon: <SwapIcon /> },
+        { to: '/last-minute-logs', label: 'Change Logs', icon: <ClockIcon /> },
       ]
     : [
         { to: '/my-schedule', label: 'My Schedule', icon: <ScheduleIcon /> },

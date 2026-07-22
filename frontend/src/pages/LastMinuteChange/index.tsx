@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { format, addDays } from 'date-fns';
 import { rosterApi } from '../../api/roster';
@@ -52,6 +53,7 @@ export const LastMinuteChange: React.FC = () => {
   const [swapReason, setSwapReason] = useState('');
   const [swapping, setSwapping] = useState(false);
 
+  const navigate = useNavigate();
   const { success, error: toastError } = useToast();
   const { confirm } = useConfirm();
 
@@ -150,7 +152,7 @@ export const LastMinuteChange: React.FC = () => {
   const tomorrow = format(addDays(new Date(), 1), 'yyyy-MM-dd');
 
   return (
-    <div className="max-w-screen-xl mx-auto px-4 py-6">
+    <div className="max-w-screen-xl mx-auto px-4 py-6 pb-24">
       {/* Header */}
       <div className="page-header">
         <div>
@@ -244,9 +246,13 @@ export const LastMinuteChange: React.FC = () => {
                   <div className="text-center py-8 text-gray-400">
                     <p className="text-sm">No published roster for this date.</p>
                   </div>
+                ) : step === 'select-slot' && slots.filter((s) => s.status !== 'completed').length === 0 ? (
+                  <div className="text-center py-8 text-gray-400">
+                    <p className="text-sm">All slots for this date have been completed.</p>
+                  </div>
                 ) : (
                   <div className="space-y-2">
-                    {(step === 'select-candidate' ? [selectedSlot!] : slots).filter(Boolean).map((slot) => {
+                    {(step === 'select-candidate' ? [selectedSlot!] : slots.filter((s) => s.status !== 'completed')).filter(Boolean).map((slot) => {
                       const isSelected = selectedSlot?.id === slot.id;
                       const assignments = Array.isArray(slot.assignments) ? slot.assignments : [];
                       const hours = slot.shift_start && slot.shift_end
@@ -310,21 +316,6 @@ export const LastMinuteChange: React.FC = () => {
                 )}
               </div>
 
-              {/* Drop button */}
-              {step === 'select-slot' && selectedSlot && (
-                <div className="px-4 pb-4">
-                  <button
-                    onClick={handleFlagDrop}
-                    className="btn-danger w-full"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                    </svg>
-                    Mark Staff as Unavailable & Find Replacement
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
@@ -344,9 +335,14 @@ export const LastMinuteChange: React.FC = () => {
               <p className="text-sm text-gray-500 mb-6">
                 Slot: {selectedSlot?.ambulance?.call_sign} · {selectedSlot?.shift_start?.slice(0, 5)} — {selectedSlot?.shift_end?.slice(0, 5)}
               </p>
-              <button onClick={handleReset} className="btn-primary">
-                Handle Another Change
-              </button>
+              <div className="flex gap-3 justify-center">
+                <button onClick={() => navigate('/roster', { state: { date: selectedDate } })} className="btn-primary">
+                  View Updated Roster
+                </button>
+                <button onClick={handleReset} className="btn-secondary">
+                  Handle Another Change
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -457,6 +453,24 @@ export const LastMinuteChange: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Fixed drop button */}
+      {step === 'select-slot' && selectedSlot && (
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-white via-white/95 to-transparent pointer-events-none z-50">
+          <div className="max-w-screen-xl mx-auto pointer-events-auto">
+            <button
+              onClick={handleFlagDrop}
+              className="btn-danger w-full shadow-lg"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+              </svg>
+              Mark Staff as Unavailable & Find Replacement
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

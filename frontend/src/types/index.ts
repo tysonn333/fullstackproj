@@ -176,23 +176,24 @@ export interface Flag {
 
 // ─── Audit Log ────────────────────────────────────────────────────────────────
 
-export type AuditAction =
-  | 'staff_created' | 'staff_updated' | 'staff_deactivated'
-  | 'assignment_created' | 'assignment_swapped' | 'assignment_dropped'
-  | 'leave_requested' | 'leave_approved' | 'leave_rejected'
-  | 'flag_resolved' | 'flag_dismissed'
-  | 'roster_published';
-
 export interface AuditLog {
-  id: string;
-  action: AuditAction;
+  log_id: number;
   entity_type: string;
-  entity_id: string;
-  actor_id: string;
-  actor?: Staff;
-  changes: Record<string, unknown>;
-  notes?: string;
+  entity_id: number | null;
+  action: string;
+  actor_id: string | null;
+  details: Record<string, unknown>;
   created_at: string;
+  profiles: { name: string; role: string } | null;
+}
+
+export interface AuditFilters {
+  entity_type?: string;
+  action?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
 }
 
 // ─── API Response Types ───────────────────────────────────────────────────────

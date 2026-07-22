@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { format, addDays, subDays, isWeekend, parseISO } from 'date-fns';
 import { rosterApi } from '../../api/roster';
 import { flagsApi } from '../../api/flags';
@@ -29,7 +30,9 @@ const SG_PUBLIC_HOLIDAYS = [
 ];
 
 export const RosterView: React.FC = () => {
-  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const location = useLocation();
+  const initialDate = (location.state as { date?: string })?.date || format(new Date(), 'yyyy-MM-dd');
+  const [selectedDate, setSelectedDate] = useState(initialDate);
   const [slots, setSlots] = useState<ShiftSlot[]>([]);
   const [roster, setRoster] = useState<Roster | null>(null);
   const [activeFlags, setActiveFlags] = useState<Flag[]>([]);
