@@ -4,9 +4,12 @@
  * Strategy:
  *   1. Create (or reuse draft) a roster row for the date.
  *   2. Fetch all ambulances in service on that date.
- *   3. For each ambulance generate two shift slots (day 06:00–18:00, night
- *      18:00–06:00) for each crew position (driver, attendant), respecting the
- *      ambulance service_type.
+ *   3. For each ambulance generate a shift slot for every 6-hour block of the
+ *      day (00:00–06:00, 06:00–12:00, 12:00–18:00, 18:00–00:00) and each crew
+ *      position (driver, attendant), respecting the ambulance service_type.
+ *      Six-hour blocks let a full-timer cover up to two blocks (12 h) a day and
+ *      cap a part-timer at a single block (6 h), and let the ranker steer
+ *      late-rising staff towards the afternoon/evening blocks.
  *   4. Group the driver + attendant slot of each ambulance/service/shift window
  *      and CREW THEM AS A PAIR using UC-005's pairCrew():
  *        • run UC-004 filter + UC-005 ranking to build a driver pool and an
@@ -122,10 +125,18 @@ export function peakConcurrentJobs(jobs: Array<{ pickup_time: string }>): number
   return peak;
 }
 
-const DAY_SHIFT_START = '06:00:00';
-const DAY_SHIFT_END = '18:00:00';
-const NIGHT_SHIFT_START = '18:00:00';
-const NIGHT_SHIFT_END = '06:00:00'; // next day — end_time <= start_time marks an overnight shift
+/**
+ * The day is split into four fixed 6-hour blocks. The last block (18:00–00:00)
+ * uses end_time "00:00:00", which is <= its start_time and therefore marks an
+ * overnight shift (the filter/grid helpers handle the midnight crossing). These
+ * mirror the four columns the roster grid always renders.
+ */
+const SHIFT_BLOCKS: Array<{ start: string; end: string }> = [
+  { start: '00:00:00', end: '06:00:00' },
+  { start: '06:00:00', end: '12:00:00' },
+  { start: '12:00:00', end: '18:00:00' },
+  { start: '18:00:00', end: '00:00:00' }, // overnight — end <= start
+];
 
 // Roles that can fill each crew position (UC spec: 1 driver + 1 medic/EMT/paramedic).
 const DRIVER_ROLES = new Set(['driver']);
@@ -381,24 +392,17 @@ export async function generateRoster(options: GenerateOptions): Promise<Generate
 
     for (const svcType of serviceTypes) {
       for (const position of ['driver', 'attendant'] as const) {
-        // Day shift
-        slotsToCreate.push({
-          roster_id: rosterId,
-          ambulance_id: amb.ambulance_id,
-          start_time: DAY_SHIFT_START,
-          end_time: DAY_SHIFT_END,
-          service_type: svcType,
-          crew_position: position,
-        });
-        // Night shift
-        slotsToCreate.push({
-          roster_id: rosterId,
-          ambulance_id: amb.ambulance_id,
-          start_time: NIGHT_SHIFT_START,
-          end_time: NIGHT_SHIFT_END,
-          service_type: svcType,
-          crew_position: position,
-        });
+        // One slot per 6-hour block of the day.
+        for (const block of SHIFT_BLOCKS) {
+          slotsToCreate.push({
+            roster_id: rosterId,
+            ambulance_id: amb.ambulance_id,
+            start_time: block.start,
+            end_time: block.end,
+            service_type: svcType,
+            crew_position: position,
+          });
+        }
       }
     }
   }

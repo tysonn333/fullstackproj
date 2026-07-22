@@ -304,6 +304,19 @@ export function parseWhatsAppMessage(
   return null;
 }
 
+/**
+ * Builds a click-to-chat wa.me link for contacting a staff member (UC-003 —
+ * Chad). Strips every non-digit from the phone number (wa.me wants digits only,
+ * no "+", spaces or dashes) and URL-encodes the pre-filled message. Returns
+ * null when the staff member has no usable contact number so the caller can
+ * surface a 422 rather than a broken link.
+ */
+export function buildWhatsAppContactLink(phone: string | null | undefined, message: string): string | null {
+  const digits = (phone ?? '').replace(/\D/g, '');
+  if (!digits) return null;
+  return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+}
+
 /** Reply sent when a message cannot be understood — teaches the formats. */
 export const WHATSAPP_HELP_MESSAGE =
   `Sorry, I couldn't understand that. Examples I understand:\n` +

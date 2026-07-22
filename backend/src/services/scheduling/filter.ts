@@ -2,11 +2,15 @@
  * UC-004 Filter Pipeline (Guan Hee)
  *
  * Filters staff eligibility for a given shift slot in strict order:
+ *   0. Part-time shift-length   — hard block: a part-timer cannot work a single
+ *                                 shift longer than 6 h (pure field check, run
+ *                                 first so it costs no DB queries)
  *   1. Availability check      — hard block (leave / MC / unavailable)
  *   2. Rest hours check        — hard block (< 12 h since last shift end)
  *      └ post-late-shift rest  — SOFT FLAG: after a late shift (start ≥ 18:00)
  *        the next shift should not start before 12:00 (scheduling rules ref)
- *   3. Daily hours check       — hard block (> 12 h already scheduled that day)
+ *   3. Daily hours check       — hard block: per employment type — a part-timer
+ *                                 caps at 6 h/day, a full-timer at 12 h/day
  *   4. Consecutive days check  — SOFT FLAG only (>= 7 consecutive days)
  *   5. Certification match     — hard block: role hierarchy AND a valid,
  *                                unexpired certification for the service type
@@ -23,12 +27,22 @@ export type ServiceType = 'MTS' | 'EAS' | 'both';
 export type CrewPosition = 'driver' | 'attendant';
 
 export type FilterName =
+  | 'part_time_hours'
   | 'availability'
   | 'rest_hours'
   | 'late_shift_rest'
   | 'daily_hours'
   | 'consecutive_days'
   | 'certification';
+
+/**
+ * Maximum minutes a staff member may be scheduled in a single day, by
+ * employment type. A part-timer is capped at one 6-hour block; a full-timer at
+ * two (12 hours) — matching the operational rule "try not to let staff work
+ * more than 12 hours" while keeping part-timers to short shifts.
+ */
+export const PART_TIME_MAX_DAILY_MINUTES = 360; // 6 h
+export const FULL_TIME_MAX_DAILY_MINUTES = 720; // 12 h
 
 export interface FilterStep {
   filter: FilterName;
@@ -430,6 +444,24 @@ export async function filterCandidates(
       };
     }
 
+    // --- Step 0: Part-time shift-length cap (pure field check, no DB query) ---
+    // A part-timer cannot be assigned a single shift longer than 6 h. Run
+    // before the availability query so it costs nothing when it applies.
+    if (candidate.employment_type === 'part_time' && slotDuration > PART_TIME_MAX_DAILY_MINUTES) {
+      const reason = `Part-time staff cannot work shifts exceeding ${PART_TIME_MAX_DAILY_MINUTES / 60}h (this slot is ${(slotDuration / 60).toFixed(1)}h)`;
+      trace.push({ filter: 'part_time_hours', passed: false, detail: reason });
+      return {
+        ...base,
+        eligible: false,
+        hard_blocked: true,
+        block_reason: reason,
+        consecutive_days_flag: false,
+        consecutive_days_count: 0,
+        late_shift_rest_flag: false,
+        filter_trace: trace,
+      };
+    }
+
     // --- Step 1: Availability / Leave check ---
     const availabilityBlock = await isBlockedByLeaveOrAvailability(
       candidate.staff_id,
@@ -497,28 +529,32 @@ export async function filterCandidates(
       });
     }
 
-    // --- Step 3: Daily hours check (max 12 h) ---
+    // --- Step 3: Daily hours check (per employment type) ---
     const dailyMinutes = dailyScheduledMinutes(history, rosterDate, slot.slot_id);
-    if (dailyMinutes + slotDuration > 720) {
-      // 720 min = 12 h
+    const dailyCap =
+      candidate.employment_type === 'part_time'
+        ? PART_TIME_MAX_DAILY_MINUTES
+        : FULL_TIME_MAX_DAILY_MINUTES;
+    const dailyCapHours = dailyCap / 60;
+    if (dailyMinutes + slotDuration > dailyCap) {
       const totalHours = ((dailyMinutes + slotDuration) / 60).toFixed(1);
       trace.push({
         filter: 'daily_hours',
         passed: false,
-        detail: `Would exceed 12h daily limit (${totalHours}h)`,
+        detail: `Would exceed ${dailyCapHours}h daily limit (${totalHours}h)`,
       });
       return {
         ...base,
         eligible: false,
         hard_blocked: true,
-        block_reason: `Would exceed 12h daily limit (${totalHours}h)`,
+        block_reason: `Would exceed ${dailyCapHours}h daily limit (${totalHours}h)`,
         consecutive_days_flag: false,
         consecutive_days_count: 0,
         late_shift_rest_flag: lateShiftRestFlag,
         filter_trace: trace,
       };
     }
-    trace.push({ filter: 'daily_hours', passed: true, detail: 'Within 12h daily limit' });
+    trace.push({ filter: 'daily_hours', passed: true, detail: `Within ${dailyCapHours}h daily limit` });
 
     // --- Step 4: Consecutive days (SOFT flag, NOT a hard block) ---
     const consecutiveDays = consecutivePriorDays(history, rosterDate);

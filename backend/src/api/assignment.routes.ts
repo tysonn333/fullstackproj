@@ -375,16 +375,18 @@ router.post('/:id/reassign', requireAdmin, async (req: AuthenticatedRequest, res
       return;
     }
 
-    if (!['published', 'locked'].includes(roster.status)) {
-      res.status(409).json({ error: 'Reassignment only allowed on published or locked rosters' });
+    if (!['draft', 'published', 'locked'].includes(roster.status)) {
+      res.status(409).json({ error: 'Reassignment only allowed on draft, published or locked rosters' });
       return;
     }
 
     // Fetch the assignment row for the slot — at most one exists
-    // (UNIQUE(slot_id)), possibly cancelled after a drop.
+    // (UNIQUE(slot_id)), possibly cancelled after a drop. Pull the outgoing
+    // staff member's name too so the audit trail (and the change-log viewer)
+    // can show who was swapped out by name, not just by id.
     const { data: currentAssignment } = await supabaseAdmin
       .from('assignments')
-      .select('*')
+      .select('*, staff:staff_id(full_name)')
       .eq('slot_id', slot_id)
       .single();
 
@@ -451,7 +453,10 @@ router.post('/:id/reassign', requireAdmin, async (req: AuthenticatedRequest, res
         roster_id: rosterId,
         slot_id,
         previous_staff_id: currentAssignment?.staff_id,
+        previous_staff_name:
+          (currentAssignment as { staff?: { full_name?: string } } | null)?.staff?.full_name ?? null,
         new_staff_id,
+        new_staff_name: newCandidate.full_name,
         reason: reason ?? '',
       },
     });

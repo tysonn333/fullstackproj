@@ -537,6 +537,89 @@ describe('filterCandidates() — Step 3: Daily Hours (> 12h hard block)', () => 
   });
 });
 
+describe('filterCandidates() — Step 0: Part-time shift-length cap (6h)', () => {
+  const rosterDate = '2025-06-15';
+
+  beforeEach(() => {
+    mockLeaveData = [];
+    mockAvailData = null;
+    mockAssignData = [];
+  });
+
+  it('blocks a part-timer from a 12h slot', async () => {
+    // baseSlot is 06:00–18:00 = 12h
+    const results = await filterCandidates(baseSlot, rosterDate, [
+      makeCandidate({ employment_type: 'part_time' }),
+    ]);
+    expect(results[0].eligible).toBe(false);
+    expect(results[0].hard_blocked).toBe(true);
+    expect(results[0].block_reason).toContain('6h');
+    expect(results[0].filter_trace[0].filter).toBe('part_time_hours');
+  });
+
+  it('allows a part-timer on a single 6h block', async () => {
+    const sixHourSlot: ShiftSlot = { ...baseSlot, start_time: '06:00:00', end_time: '12:00:00' };
+    const results = await filterCandidates(sixHourSlot, rosterDate, [
+      makeCandidate({ employment_type: 'part_time' }),
+    ]);
+    expect(results[0].eligible).toBe(true);
+  });
+
+  it('does NOT apply the 6h cap to full-timers on a 12h slot', async () => {
+    const results = await filterCandidates(baseSlot, rosterDate, [
+      makeCandidate({ employment_type: 'full_time' }),
+    ]);
+    expect(results[0].eligible).toBe(true);
+    expect(results[0].filter_trace.some((s) => s.filter === 'part_time_hours')).toBe(false);
+  });
+});
+
+describe('filterCandidates() — Step 3: Daily Hours per employment type', () => {
+  const rosterDate = '2025-06-15';
+
+  beforeEach(() => {
+    mockLeaveData = [];
+    mockAvailData = null;
+  });
+
+  it('blocks a part-timer already on a 6h block from a second 6h block (6h/day cap)', async () => {
+    mockAssignData = [
+      {
+        slot_id: 99,
+        shift_slots: {
+          start_time: '06:00:00',
+          end_time: '12:00:00',
+          rosters: { roster_date: '2025-06-15' },
+        },
+      },
+    ];
+    const sixHourSlot: ShiftSlot = { ...baseSlot, start_time: '12:00:00', end_time: '18:00:00' };
+    const results = await filterCandidates(sixHourSlot, rosterDate, [
+      makeCandidate({ employment_type: 'part_time' }),
+    ]);
+    expect(results[0].eligible).toBe(false);
+    expect(results[0].block_reason).toContain('6h');
+  });
+
+  it('allows a full-timer to work two 6h blocks (12h/day)', async () => {
+    mockAssignData = [
+      {
+        slot_id: 99,
+        shift_slots: {
+          start_time: '06:00:00',
+          end_time: '12:00:00',
+          rosters: { roster_date: '2025-06-15' },
+        },
+      },
+    ];
+    const sixHourSlot: ShiftSlot = { ...baseSlot, start_time: '12:00:00', end_time: '18:00:00' };
+    const results = await filterCandidates(sixHourSlot, rosterDate, [
+      makeCandidate({ employment_type: 'full_time' }),
+    ]);
+    expect(results[0].eligible).toBe(true);
+  });
+});
+
 describe('filterCandidates() — Step 4: Consecutive Days (SOFT flag only)', () => {
   const rosterDate = '2025-06-15';
 

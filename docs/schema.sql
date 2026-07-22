@@ -188,7 +188,12 @@ CREATE TABLE flags (
                 CHECK (severity IN ('critical', 'warning', 'info')),
     message     TEXT NOT NULL,
     status      VARCHAR(15) NOT NULL DEFAULT 'active'
-                CHECK (status IN ('active', 'resolved', 'dismissed', 'auto_resolved')),
+                CHECK (status IN ('active', 'resolved', 'dismissed', 'auto_resolved',
+                       'deferred', 'rejected')),
+    -- Chad UC-008: a defer snoozes a flag until this date; resolution_note keeps
+    -- the free-text reason for a resolve/dismiss/defer/reject action.
+    deferred_until    DATE,
+    resolution_note   TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at TIMESTAMPTZ,
     resolved_by UUID REFERENCES profiles(id)

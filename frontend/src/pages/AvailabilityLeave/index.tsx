@@ -10,6 +10,7 @@ import { AvailabilityForm } from './AvailabilityForm';
 import { AdminApprovalPanel } from './AdminApprovalPanel';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { useToast } from '../../components/Toast';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { useAuth } from '../../hooks/useAuth';
 import type { Staff, LeaveRequest, Availability } from '../../types';
 
@@ -38,7 +39,8 @@ export const AvailabilityLeave: React.FC = () => {
   const [loadingCalendar, setLoadingCalendar] = useState(false);
   const [loadingLeave, setLoadingLeave] = useState(false);
 
-  const { error: toastError } = useToast();
+  const { error: toastError, success } = useToast();
+  const { confirm } = useConfirm();
   const { isAdmin, staffId: myStaffId, user } = useAuth();
   const myEmail = user?.email ?? null;
 
@@ -173,6 +175,41 @@ export const AvailabilityLeave: React.FC = () => {
   const openAvailabilityFor = (dateStr: string) => {
     setAvailabilityDate(dateStr);
     setTab('availability');
+  };
+
+  // Chad UC-003: remove an availability entry (self or admin).
+  const handleDeleteAvailability = (entry: Availability) => {
+    confirm({
+      title: 'Delete availability entry',
+      message: `Remove the availability record for ${format(parseISO(entry.date), 'dd MMM yyyy')}?`,
+      variant: 'danger',
+      confirmLabel: 'Delete',
+      onConfirm: async () => {
+        try {
+          await availabilityApi.remove(entry.staff_id, entry.id);
+          success('Availability deleted');
+          loadCalendar();
+        } catch {
+          toastError('Delete failed', 'Could not remove the availability entry.');
+        }
+      },
+    });
+  };
+
+  // Chad UC-003: open a pre-filled WhatsApp chat to confirm availability (admin).
+  const handleWhatsAppContact = async (entry: Availability) => {
+    try {
+      const { url } = await availabilityApi.whatsappContact(entry.staff_id, entry.id);
+      window.open(url, '_blank', 'noopener');
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      toastError(
+        'Cannot open WhatsApp',
+        status === 422
+          ? 'This staff member has no contact number on file.'
+          : 'Could not build the WhatsApp link.'
+      );
+    }
   };
 
   const tabs: { id: TabType; label: string }[] = [
@@ -379,6 +416,58 @@ export const AvailabilityLeave: React.FC = () => {
                     );
                   })}
                 </div>
+
+                {/* Availability entries this month — with contact/delete (Chad UC-003) */}
+                {availability.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-gray-100">
+                    <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
+                      Availability Entries
+                    </p>
+                    <div className="space-y-1.5">
+                      {[...availability]
+                        .sort((a, b) => a.date.localeCompare(b.date))
+                        .map((entry) => (
+                          <div key={entry.id} className="flex items-center justify-between text-xs gap-2">
+                            <span className="text-gray-700">
+                              {format(parseISO(entry.date), 'dd MMM')}
+                              <span
+                                className={`ml-2 badge text-[10px] ${
+                                  entry.status === 'available'
+                                    ? 'badge-green'
+                                    : entry.status === 'partial'
+                                    ? 'badge-yellow'
+                                    : 'badge-red'
+                                }`}
+                              >
+                                {entry.status}
+                                {entry.status === 'partial' && entry.start_time && entry.end_time
+                                  ? ` ${entry.start_time}–${entry.end_time}`
+                                  : ''}
+                              </span>
+                            </span>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {isAdmin && (
+                                <button
+                                  onClick={() => handleWhatsAppContact(entry)}
+                                  className="btn-secondary btn-sm text-[11px] text-green-700 border-green-200 hover:bg-green-50"
+                                  title="Contact this staff member on WhatsApp to confirm"
+                                >
+                                  💬 WhatsApp
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleDeleteAvailability(entry)}
+                                className="btn-secondary btn-sm text-[11px] text-red-600 border-red-200 hover:bg-red-50"
+                                title="Delete this availability entry"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Leave list for this month */}
                 {leaveRequests.filter(r => r.status !== 'rejected').length > 0 && (

@@ -1,10 +1,11 @@
 import { Router, Response, NextFunction } from 'express';
 import supabaseAdmin from '../lib/supabase';
-import { authenticate, ensureSelfOrAdmin, AuthenticatedRequest } from '../middleware/auth';
+import { authenticate, requireAdmin, ensureSelfOrAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { logAudit } from '../services/audit.service';
 import {
   parseWhatsAppMessage,
   formatWhatsAppResponse,
+  buildWhatsAppContactLink,
   WHATSAPP_HELP_MESSAGE,
 } from '../integrations/whatsapp';
 import {
@@ -190,6 +191,114 @@ router.post(
       );
 
       res.status(201).json({ data, flags_raised: flagsRaised });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/staff/:id/availability/:availabilityId
+ * Removes a single availability entry. Employees may only delete their own;
+ * admins may delete anyone's. Returns 204 on success, 404 if not found.
+ */
+router.delete(
+  '/staff/:id/availability/:availabilityId',
+  authenticate,
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const staffId = parseInt(req.params.id, 10);
+      const availabilityId = parseInt(req.params.availabilityId, 10);
+
+      const { data: existing } = await supabaseAdmin
+        .from('availability')
+        .select('availability_id, staff_id')
+        .eq('availability_id', availabilityId)
+        .single();
+
+      if (!existing || existing.staff_id !== staffId) {
+        res.status(404).json({ error: 'Availability entry not found' });
+        return;
+      }
+
+      if (!ensureSelfOrAdmin(req, res, staffId)) return;
+
+      const { error } = await supabaseAdmin
+        .from('availability')
+        .delete()
+        .eq('availability_id', availabilityId);
+
+      if (error) throw error;
+
+      await logAudit({
+        entity_type: 'availability',
+        entity_id: availabilityId,
+        action: 'delete',
+        actor_id: req.user!.id,
+        details: { staff_id: staffId },
+      });
+
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/staff/:id/availability/:availabilityId/whatsapp  (admin)
+ * Builds a click-to-chat WhatsApp link to ask a staff member to confirm the
+ * availability entry (UC-003 — Chad). Body: { message? } overrides the default
+ * text. Returns { staff, message, url }; 404 if the entry is missing, 422 if
+ * the staff member has no contact number.
+ */
+router.post(
+  '/staff/:id/availability/:availabilityId/whatsapp',
+  authenticate,
+  requireAdmin,
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const staffId = parseInt(req.params.id, 10);
+      const availabilityId = parseInt(req.params.availabilityId, 10);
+
+      const { data: entry } = await supabaseAdmin
+        .from('availability')
+        .select('availability_id, staff_id, work_date, is_available, start_time, end_time')
+        .eq('availability_id', availabilityId)
+        .single();
+
+      if (!entry || entry.staff_id !== staffId) {
+        res.status(404).json({ error: 'Availability entry not found' });
+        return;
+      }
+
+      const { data: staff } = await supabaseAdmin
+        .from('staff')
+        .select('staff_id, full_name, phone')
+        .eq('staff_id', staffId)
+        .single();
+
+      if (!staff) {
+        res.status(404).json({ error: 'Staff member not found' });
+        return;
+      }
+
+      const window =
+        entry.start_time && entry.end_time
+          ? ` from ${String(entry.start_time).slice(0, 5)} to ${String(entry.end_time).slice(0, 5)}`
+          : '';
+      const custom = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+      const message =
+        custom ||
+        `Hi ${staff.full_name}, are you still available on ${entry.work_date}${window}?`;
+
+      const url = buildWhatsAppContactLink(staff.phone, message);
+      if (!url) {
+        res.status(422).json({ error: 'The selected staff member has no contact number' });
+        return;
+      }
+
+      res.json({ staff: { staff_id: staff.staff_id, full_name: staff.full_name }, message, url });
     } catch (err) {
       next(err);
     }

@@ -125,6 +125,28 @@ export const availabilityApi = {
     return { availability: mapAvailability(data.data), flagsRaised: data.flags_raised ?? 0 };
   },
 
+  /** Remove a single availability entry (self or admin) — Chad UC-003. */
+  remove: async (staffId: string, availabilityId: string): Promise<void> => {
+    await apiClient.delete(`/api/v1/staff/${staffId}/availability/${availabilityId}`);
+  },
+
+  /**
+   * Build a click-to-chat WhatsApp link to confirm an availability entry with a
+   * part-timer (admin only) — Chad UC-003. Returns the wa.me URL + message.
+   */
+  whatsappContact: async (
+    staffId: string,
+    availabilityId: string,
+    message?: string
+  ): Promise<{ url: string; message: string; staff: { staff_id: number; full_name: string } }> => {
+    const { data } = await apiClient.post<{
+      url: string;
+      message: string;
+      staff: { staff_id: number; full_name: string };
+    }>(`/api/v1/staff/${staffId}/availability/${availabilityId}/whatsapp`, { message });
+    return data;
+  },
+
   // Leave Requests
   listLeaveRequests: async (params?: {
     staff_id?: string;

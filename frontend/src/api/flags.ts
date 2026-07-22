@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { Flag, FlagFilters, FlagType, FlagStatus, PaginatedResponse, Staff } from '../types';
+import type { AuditLog, Flag, FlagFilters, FlagType, FlagStatus, PaginatedResponse, Staff } from '../types';
 
 // ─── Row types ────────────────────────────────────────────────────────────────
 
@@ -15,6 +15,8 @@ interface FlagRow {
   created_at: string;
   resolved_at: string | null;
   resolved_by: string | null;
+  deferred_until?: string | null;
+  resolution_note?: string | null;
   rosters?: { roster_date?: string; status?: string } | null;
   shift_slots?: {
     start_time?: string;
@@ -23,6 +25,12 @@ interface FlagRow {
     crew_position?: string;
   } | null;
   staff?: { full_name?: string; role?: Staff['role'] } | null;
+}
+
+export interface FlagNotification {
+  title: string;
+  body: string;
+  tag: string;
 }
 
 const FLAG_TYPE_LABELS: Record<string, string> = {
@@ -61,6 +69,8 @@ function mapFlag(row: FlagRow): Flag {
       : undefined,
     resolved_by: row.resolved_by ?? undefined,
     resolved_at: row.resolved_at ?? undefined,
+    resolution_reason: row.resolution_note ?? undefined,
+    deferred_until: row.deferred_until ?? undefined,
     created_at: row.created_at,
     updated_at: row.resolved_at ?? row.created_at,
   };
@@ -112,6 +122,36 @@ export const flagsApi = {
       reason,
     });
     return mapFlag(data.data);
+  },
+
+  defer: async (id: string, deferredUntil: string, note?: string): Promise<Flag> => {
+    const { data } = await apiClient.put<{ data: FlagRow }>(`/api/v1/flags/${id}/defer`, {
+      deferred_until: deferredUntil,
+      note,
+    });
+    return mapFlag(data.data);
+  },
+
+  reject: async (id: string, reason: string): Promise<Flag> => {
+    const { data } = await apiClient.put<{ data: FlagRow }>(`/api/v1/flags/${id}/reject`, {
+      reason,
+    });
+    return mapFlag(data.data);
+  },
+
+  reopen: async (id: string): Promise<Flag> => {
+    const { data } = await apiClient.put<{ data: FlagRow }>(`/api/v1/flags/${id}/reopen`, {});
+    return mapFlag(data.data);
+  },
+
+  getAudit: async (id: string): Promise<AuditLog[]> => {
+    const { data } = await apiClient.get<{ data: AuditLog[] }>(`/api/v1/flags/${id}/audit`);
+    return data.data ?? [];
+  },
+
+  notify: async (id: string): Promise<FlagNotification> => {
+    const { data } = await apiClient.post<{ data: FlagNotification }>(`/api/v1/flags/${id}/notify`, {});
+    return data.data;
   },
 
   bulkResolve: async (ids: string[], reason: string): Promise<{ resolved: number }> => {

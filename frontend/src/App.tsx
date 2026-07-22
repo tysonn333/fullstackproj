@@ -10,6 +10,7 @@ import { StaffManagement } from './pages/StaffManagement';
 import { AvailabilityLeave } from './pages/AvailabilityLeave';
 import { ExceptionsPanel } from './pages/ExceptionsPanel';
 import { LastMinuteChange } from './pages/LastMinuteChange';
+import { LastMinuteLogs } from './pages/LastMinuteLogs';
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 
@@ -138,6 +139,16 @@ const App: React.FC = () => {
                   <ProtectedRoute requireAdmin>
                     <AppLayout>
                       <LastMinuteChange />
+                    </AppLayout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/last-minute-logs"
+                element={
+                  <ProtectedRoute requireAdmin>
+                    <AppLayout>
+                      <LastMinuteLogs />
                     </AppLayout>
                   </ProtectedRoute>
                 }

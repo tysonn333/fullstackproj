@@ -14,6 +14,7 @@ import rosterRoutes from './api/roster.routes';
 import assignmentRoutes from './api/assignment.routes';
 import flagsRoutes from './api/flags.routes';
 import jobsRoutes from './api/jobs.routes';
+import auditRoutes from './api/audit.routes';
 
 const app = express();
 
@@ -53,6 +54,7 @@ app.use(`${API}/roster`, rosterRoutes);
 app.use(`${API}`, assignmentRoutes);          // Handles /api/v1/slots/..., /api/v1/assignments/..., and /api/v1/:id/reassign/... (no /roster segment — the frontend calls it this way)
 app.use(`${API}/flags`, flagsRoutes);
 app.use(`${API}/jobs`, jobsRoutes);
+app.use(`${API}/audit`, auditRoutes);
 
 // ── 404 & error handlers ──────────────────────────────────────────────────
 
